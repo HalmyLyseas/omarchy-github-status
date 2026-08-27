@@ -15,10 +15,10 @@ treat them as evidence, not as something a fresh clone needs to have.
 |---|---|
 | `Service.qml` | The data layer and the only owner of machine-wide state: every `Process`, `Timer`, and piece of mutable data lives here. Loaded once by the shell (`kinds: ["service", ...]`, `keepLoaded: true`). |
 | `BarWidget.qml` | The bar button. Eager-`Loader`-hosted panel, GitHub octicon + count pill. One instance **per monitor** — reads `Service.qml`'s public properties, owns none of its own. |
-| `Panel.qml` | The popup UI: hero, degradation hint, five sections (inbox, review requests, open PRs, open issues, repo activity). One instance **per monitor**, same as `BarWidget.qml`. Binds to the service; writes nothing back to it except calling `refresh()`/`openUrl()`/`setRepoSort()`. |
-| `SectionHeader.qml` | v1.1: kit-styled section header (label + right-aligned count/`"…"` pill, optional `extra` slot) shared by all five `Panel.qml` sections; also where the F1 recent/stars toggle is instantiated for the repo-activity header. |
-| `Model.js` | Pure logic, no Quickshell imports, ES5-compatible so plain Node can `require()` it: every `gh` JSON → UI-shape mapping function, the URL allowlist, the failure classifier, field/list caps, and (v1.1) `repoPill`/`sortRepos`/`ownerFromNameWithOwner`/`isExternalOwner`/`mergedSettings`. Fully unit-testable without a running shell. |
-| `scripts/fetch-dashboard` | `bash`: `exec gh api graphql` with the combined query (openPRs + repos + review-requests + v1.1's `myIssues`) embedded as a fixed string. |
+| `Panel.qml` | The popup UI: hero, degradation hint, search field (v1.2), five sections (inbox, review requests, open PRs, open issues, repo activity), each independently foldable (v1.2). One instance **per monitor**, same as `BarWidget.qml`. Binds to the service; writes nothing back to it except calling `refresh()`/`openUrl()`/`setRepoSort()`/`setIssuesFilter()`. |
+| `SectionHeader.qml` | v1.1: kit-styled section header (label + right-aligned count/`"…"` pill, optional `extra` slot) shared by all five `Panel.qml` sections; also where the F1 recent/stars and (v1.2) G4 Focus/All toggles are instantiated. v1.2 adds `collapsed`/`toggled()` for the click-to-fold header (G3). |
+| `Model.js` | Pure logic, no Quickshell imports, ES5-compatible so plain Node can `require()` it: every `gh` JSON → UI-shape mapping function, the URL allowlist, the failure classifier, field/list caps, (v1.1) `repoPill`/`sortRepos`/`ownerFromNameWithOwner`/`isExternalOwner`/`mergedSettings`, and (v1.2) `matchesQuery`/`filterIssues`/`lastComment`/`subscribedFromViewerSubscription`. Fully unit-testable without a running shell. |
+| `scripts/fetch-dashboard` | `bash`: `exec gh api graphql` with the combined query (openPRs + repos + review-requests + v1.1's `myIssues`, each PR/issue/review-request node also carrying v1.2's `comments(last: 1)` and (issues only) `viewerSubscription`) embedded as a fixed string. |
 | `scripts/fetch-notifications` | `bash`: `exec gh api -i notifications [-H "If-None-Match: $1"]` — the ETag is the one remote-derived script argument anywhere in this plugin. |
 | `scripts/probe-auth` | `bash`: `gh api user --jq .login` under `timeout 25`, translated to one of five stable exit codes. Does **not** call `gh auth status` (see below). |
 
@@ -152,9 +152,15 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   Text.PlainText` + `elide: Text.ElideRight` on every `Text` element that
   renders a remote-derived field (notification/PR/review-request/issue/repo
   title/reason/meta/age/owner text) — grep-provable
-  (`grep -c 'textFormat: Text.PlainText' Panel.qml` → 19 as of the v1.1
-  delta, up from 12 pre-delta; `SectionHeader.qml` adds one more for its
-  synthesized — not remote, but PlainText as policy — count pill). This exists
+  (`grep -c 'textFormat: Text.PlainText' Panel.qml` → 20 as of the v1.2
+  delta, up from 19 at v1.1 and 12 pre-delta — only +1 despite G2 adding
+  three new `SafeToolTip` call sites (`PrRow`/`ReviewRequestRow`/`IssueRow`)
+  because `SafeToolTip`'s own `PlainText` is declared once, on its shared
+  `component` definition (`Panel.qml:832-...`); reusing the component at
+  three more sites doesn't add three more grep-visible lines. The one new
+  hit is the G1 search row's "✕" clear glyph. `SectionHeader.qml` → 2 (the
+  pre-existing count pill plus v1.2's fold chevron, both synthesized glyphs —
+  not remote, but PlainText as policy)). This exists
   because the closest sibling plugin, `viniciusfnery.github-inbox`, was
   flagged in its own marketplace maintainer review for rendering
   GitHub-controlled notification titles through a component that
@@ -295,6 +301,72 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   known `owner` field (`Model.remapNotificationsExternal`) rather than
   waiting out a full `notificationsIntervalSec` poll or needing to retain a
   second copy of raw data anywhere.
+
+- **G1 search field is not auto-focused on open — the key catcher keeps
+  focus by default, the field earns it only on click.** (v1.2,
+  `exchange/26-feedback2-delta-spec.md`, `exchange/28-s14-ui-delta.md`.)
+  `KeyboardPanel` already force-focuses its own `PanelKeyCatcher` on every
+  open via an internal `Qt.callLater`; a second, independent
+  `Qt.callLater(searchField.forceActiveFocus)` from `Panel.qml`'s own
+  `onOpenedChanged` would race that — undocumented ordering between two
+  handlers scheduled into the same event-loop queue, not a guarantee. The
+  shape actually used follows the closest first-party precedent for an
+  inline text editor living inside a `KeyboardPanel` — the network plugin's
+  Wi-Fi passphrase prompt (`/usr/share/omarchy/shell/plugins/panels/network/
+  Panel.qml:834-874,991-996`): a real `Ui/TextField`, focused only by an
+  explicit user action (a click), with `PanelKeyCatcher.blocked: !!
+  searchField && searchField.activeFocus` so the moment the field holds
+  focus, the catcher stops intercepting keys — `PanelKeyCatcher.qml`'s own
+  header comment prescribes exactly this shape. The image-picker's
+  `filterable` idiom (typing directly into an invisible-focus carousel via
+  its own `Keys.onPressed`) was considered and rejected: that panel never
+  binds `j/k/h/l`, this one already does (`PanelKeyCatcher`'s vertical
+  scroll), and `PanelKeyCatcher.Keys.onPressed`'s own if/else chain consumes
+  those letters *before* the generic `textKey` channel a filterable-style
+  field would need — concretely, **"Nujabes" contains a "j"**, the human's
+  own example string, which would have been silently truncated typing
+  through that channel. Esc is handled locally on the field itself
+  (`Keys.onEscapePressed`): clears a non-empty query first, closes the panel
+  on a second Esc — no change to `PanelKeyCatcher` itself. A clickable "✕"
+  is always present too, for mouse users and as a fallback.
+
+- **G4's `subscribed` fails open, in both directions, deliberately.**
+  (v1.2, `exchange/26-feedback2-delta-spec.md`.) `Model.
+  subscribedFromViewerSubscription` treats a missing/`null`
+  `viewerSubscription` field as `true` (subscribed), never `false`; `Model.
+  filterIssues`'s `"focus"` branch keeps a row whose `subscribed` field is
+  anything other than exactly `false` (`subscribed !== false`, not
+  `subscribed === true`). Both choices point the same direction on purpose:
+  a schema hiccup, a future GraphQL field rename, or a hand-built/legacy
+  item missing the field entirely must never cause an issue the user cares
+  about to silently vanish under the default "Focus" view — the failure
+  mode of an over-eager filter (an issue wrongly hidden) is worse than the
+  failure mode of an under-eager one (an issue wrongly shown, which is
+  exactly what "All" is there to reveal anyway). This mirrors the project's
+  existing fail-open precedent for `isExternalOwner`'s "unknown login is
+  never external" default. Live-verified against the real account
+  (`exchange/27-s13-data-delta.md` §1): `ValveSoftware/Proton#8626` comes
+  back `viewerSubscription: "UNSUBSCRIBED"` → `subscribed: false` → hidden
+  in Focus, the exact acceptance case from the human's own feedback.
+
+- **G3's fold state is session-only, per-panel-instance, deliberately not
+  persisted to `shell.json`.** (v1.2, `exchange/26-feedback2-delta-spec.md`.)
+  `Panel.qml`'s five `xCollapsed` booleans
+  (`inboxCollapsed`/`reviewRequestsCollapsed`/`openPRsCollapsed`/
+  `myIssuesCollapsed`/`repoActivityCollapsed`) are plain properties on the
+  panel root, reset alongside `searchQuery` in the same `onOpenedChanged`
+  branch — "resets on panel reload" is the spec's own words, not an
+  implementation shortcut. This is a different persistence tier than
+  `repoSort`/`issuesFilter` (both go through `Model.mergedSettings` →
+  `shell.updateEntryInline`, survive a restart) on purpose: a fold is a
+  transient "I don't need to see this right now" gesture scoped to one
+  look at the panel, not a standing preference like sort order or which
+  issues to see by default — persisting it would mean a section a user
+  folded once during a busy afternoon stays invisible forever until they
+  remember to unfold it, silently hiding future data the way F4's own
+  "less old clutter" complaint was originally about. If a future feedback
+  round asks for persisted fold state, it is a new, explicit decision, not
+  a natural extension of this one.
 
 ## Accepted risks (documented, not fixed)
 
