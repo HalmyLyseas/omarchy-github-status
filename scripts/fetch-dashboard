@@ -20,11 +20,25 @@
 # exchange/20-s8-data-delta.md for the trimmed evidence). Same shape/first:
 # window discipline as `openPRs` above: capped at `first: 20`,
 # `orderBy: UPDATED_AT DESC`, the exact same pattern already used for
-# `openPRs` (an authored, viewer-scoped connection). The remainder of the
-# query is byte-identical to the version originally verified live in
-# exchange/04-github-data.md #6 (~2s wall time, ~1 graphql point per call).
-# Do not edit the query without re-verifying against a real `gh api graphql`
-# call and updating that doc.
+# `openPRs` (an authored, viewer-scoped connection).
+#
+# Extended live again 2026-08-28 for exchange/26-feedback2-delta-spec.md
+# (G2/G4): `comments(last: 1) { nodes { author { login } updatedAt } }` added
+# to `openPRs.nodes`, `myIssues.nodes`, and the `reviewRequests` search PR
+# fragment (G2 -- last-commenter tooltip; the single most recent comment
+# only, never a full comment list); `viewerSubscription` added to
+# `myIssues.nodes` only (G4 -- Focus/All toggle; live-verified against this
+# account: `ValveSoftware/Proton#8626` -> `UNSUBSCRIBED`,
+# `HANCORE-linux/omarchy-plugin-marketplace#2672` -> `SUBSCRIBED`, see
+# exchange/27-s13-data-delta.md for the trimmed evidence). Wall time and
+# graphql point cost are unchanged by this addition (~2s, ~1 point) --
+# `comments(last: 1)` and `viewerSubscription` are both cheap fields on an
+# already-fetched node, not a new connection root.
+#
+# The remainder of the query is byte-identical to the version originally
+# verified live in exchange/04-github-data.md #6. Do not edit the query
+# without re-verifying against a real `gh api graphql` call and updating
+# that doc.
 #
 # NOTE (deviation from exchange/06-design.md's literal suggestion of
 # `-f query=@-`): `gh api`'s `@<path>`/`@-` file/stdin-reading syntax is only
@@ -55,13 +69,15 @@ query {
         title url number updatedAt isDraft reviewDecision
         repository { nameWithOwner }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        comments(last: 1) { nodes { author { login } updatedAt } }
       }
     }
     myIssues: issues(states: OPEN, first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
       totalCount
       nodes {
-        title url number updatedAt
+        title url number updatedAt viewerSubscription
         repository { nameWithOwner }
+        comments(last: 1) { nodes { author { login } updatedAt } }
       }
     }
     repositories(first: 20, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) {
@@ -81,7 +97,11 @@ query {
   }
   reviewRequests: search(query: "is:open is:pr review-requested:@me", type: ISSUE, first: 10) {
     nodes {
-      ... on PullRequest { title url number updatedAt repository { nameWithOwner } }
+      ... on PullRequest {
+        title url number updatedAt
+        repository { nameWithOwner }
+        comments(last: 1) { nodes { author { login } updatedAt } }
+      }
     }
   }
 }

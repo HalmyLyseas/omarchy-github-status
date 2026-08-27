@@ -69,6 +69,21 @@
 //     `owner` (F6) -- the REST notifications payload has no `viewer`-shaped
 //     field to read a login from itself.
 //
+// S13 delta pass (exchange/26-feedback2-delta-spec.md, on top of the S8/S12
+// passes above):
+//   - G2: `comments(last: 1)` added to openPRs/myIssues/reviewRequests nodes
+//     -- Model.mapOpenPRs/mapReviewRequests/mapMyIssues now also produce
+//     `lastCommenter`/`lastCommentAt` per row (Model.lastComment()).
+//   - G4: `myIssues` is now Model.filterIssues(internal.myIssues,
+//     issuesFilter) -- filtered at READ time, same "sort/slice at read time,
+//     store raw at fetch time" shape repos already uses for repoSort/
+//     repoLimit (see the S8 note above). `issuesFilter`/`setIssuesFilter()`
+//     are new public API, mirroring `repoSort`/`setRepoSort()` exactly
+//     (validation, mergedSettings persistence, immediate apply via the same
+//     live-binding-over-_settingsEntry mechanism). `myIssuesAllCount`
+//     exposes the pre-filter length so the UI can show "Focus (3) / All
+//     (9)"-style affordances.
+//
 // S12 fix pass (exchange/23-s11-delta-review.md, applying the PM's binding
 // fix decisions in exchange/24-s12-release.md):
 //   - F1: `dashboardLastSyncMs`/`notificationsLastSyncMs` added as public,
@@ -140,7 +155,15 @@ Item {
   // exchange/19-feedback-delta-spec.md F3: same lifecycle/state handling as
   // openPRs -- per-source (well, per-dashboard-fetch) replace on success via
   // Model.mapDashboard's null-vs-[] contract, keep-last-good on failure.
-  readonly property var myIssues: internal.myIssues
+  // exchange/26-feedback2-delta-spec.md G4: filtered per `issuesFilter` at
+  // READ time (same "raw at fetch time, derived at read time" split repos
+  // already uses for repoSort/repoLimit below) -- a live issuesFilter change
+  // re-filters instantly with no new fetch. internal.myIssues itself always
+  // holds the full, unfiltered last-good list.
+  readonly property var myIssues: Model.filterIssues(internal.myIssues, root.issuesFilter)
+  // G4: pre-filter count, so the UI can show "Focus (3) / All (9)"-style
+  // affordances without needing internal.myIssues directly.
+  readonly property int myIssuesAllCount: internal.myIssues.length
   // F1: repos are sorted per `repoSort`, THEN sliced per repoLimit (a
   // setting, min 3/max 30) -- single ownership of both the sort and the
   // slice lives here, on top of Model.js's own fixed CAP_REPOS=30 -- see
@@ -213,6 +236,24 @@ Item {
     log("repoSort set to " + next)
   }
 
+  // G4 (exchange/26-feedback2-delta-spec.md): identical shape to
+  // setRepoSort() above -- validate, then persist via the same
+  // Model.mergedSettings full-next-state pattern (never a raw
+  // `{issuesFilter: mode}` write, which would drop every other persisted
+  // setting the same way a bare repoSort write would). "Applies
+  // immediately": `root.issuesFilter` below is a live binding over
+  // `_settingsEntry`, so `myIssues` (filtered at read time, above)
+  // re-evaluates the instant updateEntryInline reassigns shell.shellConfig.
+  function setIssuesFilter(mode) {
+    var next = validIssuesFilter(mode)
+    if (!shell || typeof shell.updateEntryInline !== "function") {
+      log("setIssuesFilter: shell.updateEntryInline unavailable -- cannot persist")
+      return
+    }
+    shell.updateEntryInline("halmylyseas.github-status", Model.mergedSettings(root._settingsEntry, "issuesFilter", next))
+    log("issuesFilter set to " + next)
+  }
+
   // ============================================================
   // Settings: shell.json entry for this plugin, manifest defaults as
   // fallback. Plain readonly bindings off shell.shellConfig (itself a live
@@ -243,6 +284,11 @@ Item {
   // list.
   readonly property string repoSort:
     validRepoSort(settingStr(_settingsEntry, "repoSort", manifestDefault("repoSort", "activity")))
+  // G4: "focus" (default) or "all" -- validIssuesFilter() is the single
+  // point that decides what counts as a legal value, same shape as
+  // repoSort/validRepoSort above.
+  readonly property string issuesFilter:
+    validIssuesFilter(settingStr(_settingsEntry, "issuesFilter", manifestDefault("issuesFilter", "focus")))
 
   // shell.json's bar-layout entries can be a bare string ("halmylyseas.
   // github-status") instead of an object ({id: "..."}) -- that form
@@ -303,6 +349,10 @@ Item {
 
   function validRepoSort(mode) {
     return mode === "stars" ? "stars" : "activity"
+  }
+
+  function validIssuesFilter(mode) {
+    return mode === "all" ? "all" : "focus"
   }
 
   function manifestDefault(key, hardFallback) {
@@ -924,7 +974,8 @@ Item {
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
       + " notificationsIntervalSec=" + root.notificationsIntervalSec
       + " repoLimit=" + root.repoLimit
-      + " repoSort=" + root.repoSort + ")")
+      + " repoSort=" + root.repoSort
+      + " issuesFilter=" + root.issuesFilter + ")")
     startProbe()
   }
 }

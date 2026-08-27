@@ -7,13 +7,13 @@
         "nodes": [
           {
             "title": "Add Nujabes theme",
-            "url": "https://github.com/omacom-io/omarchy-site/pull/77",
+            "url": "https://github.com/omacom/omarchy-site/pull/77",
             "number": 77,
             "updatedAt": "2026-08-27T11:43:56Z",
             "isDraft": false,
             "reviewDecision": null,
             "repository": {
-              "nameWithOwner": "omacom-io/omarchy-site"
+              "nameWithOwner": "omacom/omarchy-site"
             },
             "commits": {
               "nodes": [
@@ -23,6 +23,9 @@
                   }
                 }
               ]
+            },
+            "comments": {
+              "nodes": []
             }
           }
         ]
@@ -35,8 +38,14 @@
             "url": "https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2672",
             "number": 2672,
             "updatedAt": "2026-08-27T05:36:20Z",
+            "viewerSubscription": "SUBSCRIBED",
             "repository": {
               "nameWithOwner": "HANCORE-linux/omarchy-plugin-marketplace"
+            },
+            "comments": {
+              "nodes": [
+                { "author": { "login": "HalmyLyseas" }, "updatedAt": "2026-08-27T21:47:43Z" }
+              ]
             }
           },
           {
@@ -44,8 +53,12 @@
             "url": "https://github.com/limehawk/omarchy-theme-website/issues/117",
             "number": 117,
             "updatedAt": "2026-08-26T16:46:16Z",
+            "viewerSubscription": "SUBSCRIBED",
             "repository": {
               "nameWithOwner": "limehawk/omarchy-theme-website"
+            },
+            "comments": {
+              "nodes": []
             }
           },
           {
@@ -53,8 +66,12 @@
             "url": "https://github.com/anthropics/claude-code/issues/84820",
             "number": 84820,
             "updatedAt": "2026-08-24T22:09:11Z",
+            "viewerSubscription": "SUBSCRIBED",
             "repository": {
               "nameWithOwner": "anthropics/claude-code"
+            },
+            "comments": {
+              "nodes": []
             }
           },
           {
@@ -62,8 +79,14 @@
             "url": "https://github.com/Sebastrion/awesome-unofficial-pc-ports/issues/11",
             "number": 11,
             "updatedAt": "2026-08-09T17:59:00Z",
+            "viewerSubscription": "SUBSCRIBED",
             "repository": {
               "nameWithOwner": "Sebastrion/awesome-unofficial-pc-ports"
+            },
+            "comments": {
+              "nodes": [
+                { "author": { "login": "HalmyLyseas" }, "updatedAt": "2026-08-09T17:59:00Z" }
+              ]
             }
           },
           {
@@ -71,8 +94,14 @@
             "url": "https://github.com/ValveSoftware/Proton/issues/8626",
             "number": 8626,
             "updatedAt": "2026-05-08T20:42:19Z",
+            "viewerSubscription": "UNSUBSCRIBED",
             "repository": {
               "nameWithOwner": "ValveSoftware/Proton"
+            },
+            "comments": {
+              "nodes": [
+                { "author": { "login": "neidlosEnte7" }, "updatedAt": "2026-05-08T20:42:19Z" }
+              ]
             }
           }
         ]

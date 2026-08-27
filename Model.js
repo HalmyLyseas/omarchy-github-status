@@ -40,6 +40,12 @@ var CAP_MY_ISSUES = 20  // exchange/19-feedback-delta-spec.md F3 -- same cap sha
 var FIELD_CAP_TEXT = 300    // titles / commit headlines
 var FIELD_CAP_TAG = 100     // reasons / repo identifiers / release tags / timestamps
 var FIELD_CAP_URL = 2048    // urls
+// exchange/26-feedback2-delta-spec.md G2/G1: lastCommenter login cap (a
+// GitHub login is already server-capped well under this); the search query
+// cap is generous enough for any real typed query while still bounding a
+// pathological/huge query string's cost in matchesQuery's per-item scan.
+var FIELD_CAP_COMMENTER = 40
+var QUERY_CAP = 100
 
 var MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -241,6 +247,48 @@ function ciRollupToState(rollup) {
   }
 }
 
+// -------------------------------------------------------- last comment (G2)
+
+// `comments(last: 1)` GraphQL connection -> { commenter, commentAt }, both
+// "" when there is no comment at all, OR when the most recent comment's
+// `author` is null. A null author is a genuine, documented GraphQL shape --
+// a comment left by a since-deleted GitHub account -- not a malformed
+// response (exchange/26-feedback2-delta-spec.md G2's explicit "handle it"
+// note). Returned as one paired result rather than two independently-
+// defensive fields: showing an age with no attributable login ("last
+// comment: · 3d") would misrepresent who commented, and the UI's own
+// contract (omit the tooltip line entirely when lastCommenter is "")
+// already treats the two as a single unit -- so commentAt collapses to ""
+// right alongside commenter whenever there's nothing attributable to show.
+function lastComment(commentsConn) {
+  var empty = { commenter: "", commentAt: "" }
+  if (!isObject(commentsConn) || !isArray(commentsConn.nodes) || commentsConn.nodes.length === 0) return empty
+  var node = commentsConn.nodes[commentsConn.nodes.length - 1]
+  if (!isObject(node)) return empty
+  var author = isObject(node.author) ? node.author : null
+  var login = author ? safeStr(author.login, "") : ""
+  if (!login) return empty
+  return {
+    commenter: truncate(login, FIELD_CAP_COMMENTER),
+    commentAt: truncate(node.updatedAt, FIELD_CAP_TAG)
+  }
+}
+
+// ---------------------------------------------------------- subscribed (G4)
+
+// GraphQL's `viewerSubscription` enum on an Issue: "SUBSCRIBED" |
+// "UNSUBSCRIBED" | "IGNORED" (a repo-level "mute", rare from this account's
+// own issues but defended the same as UNSUBSCRIBED -- neither means "I want
+// to keep seeing this by default"). exchange/26-feedback2-delta-spec.md G4:
+// fail OPEN (true) on a missing/null field specifically -- a schema hiccup
+// or an older/partial response must never silently hide the user's own
+// issues -- but a field that resolved to anything other than exactly
+// "SUBSCRIBED" is trusted as a real "not subscribed" signal.
+function subscribedFromViewerSubscription(viewerSubscription) {
+  if (viewerSubscription === undefined || viewerSubscription === null) return true
+  return viewerSubscription === "SUBSCRIBED"
+}
+
 // ------------------------------------------------------------------ dashboard
 
 function mapOpenPRs(login, nodes) {
@@ -258,6 +306,7 @@ function mapOpenPRs(login, nodes) {
         rollup = lastCommitNode.commit.statusCheckRollup
       }
     }
+    var prComment = lastComment(pr.comments)
     openPRs.push({
       title: truncate(pr.title, FIELD_CAP_TEXT),
       repo: prRepo,
@@ -268,7 +317,9 @@ function mapOpenPRs(login, nodes) {
       ciState: ciRollupToState(rollup),
       reviewDecision: truncate(isString(pr.reviewDecision) ? pr.reviewDecision : "", FIELD_CAP_TAG),
       isExternal: isExternalOwner(prOwner, login),
-      owner: prOwner
+      owner: prOwner,
+      lastCommenter: prComment.commenter,
+      lastCommentAt: prComment.commentAt
     })
   }
   return openPRs
@@ -282,6 +333,7 @@ function mapReviewRequests(login, nodes) {
     if (!isObject(rr)) continue
     var rrRepo = isObject(rr.repository) ? truncate(rr.repository.nameWithOwner, FIELD_CAP_TAG) : ""
     var rrOwner = ownerFromNameWithOwner(rrRepo)
+    var rrComment = lastComment(rr.comments)
     reviewRequests.push({
       title: truncate(rr.title, FIELD_CAP_TEXT),
       repo: rrRepo,
@@ -289,7 +341,9 @@ function mapReviewRequests(login, nodes) {
       webUrl: truncate(rr.url, FIELD_CAP_URL),
       updatedAt: truncate(rr.updatedAt, FIELD_CAP_TAG),
       isExternal: isExternalOwner(rrOwner, login),
-      owner: rrOwner
+      owner: rrOwner,
+      lastCommenter: rrComment.commenter,
+      lastCommentAt: rrComment.commentAt
     })
   }
   return reviewRequests
@@ -298,6 +352,11 @@ function mapReviewRequests(login, nodes) {
 // exchange/19-feedback-delta-spec.md F3: issues the viewer opened, any repo,
 // open state -- same shape/cap/truncation discipline as mapReviewRequests,
 // plus the F6 isExternal/owner marking every other row type gets.
+//
+// exchange/26-feedback2-delta-spec.md G2/G4: also gains lastCommenter/
+// lastCommentAt (see lastComment() above) and `subscribed` (see
+// subscribedFromViewerSubscription() above) -- the field the G4 Focus/All
+// toggle filters on (filterIssues()).
 function mapMyIssues(login, nodes) {
   var arr = isArray(nodes) ? nodes : []
   var myIssues = []
@@ -306,6 +365,7 @@ function mapMyIssues(login, nodes) {
     if (!isObject(issue)) continue
     var issueRepo = isObject(issue.repository) ? truncate(issue.repository.nameWithOwner, FIELD_CAP_TAG) : ""
     var issueOwner = ownerFromNameWithOwner(issueRepo)
+    var issueComment = lastComment(issue.comments)
     myIssues.push({
       title: truncate(issue.title, FIELD_CAP_TEXT),
       repo: issueRepo,
@@ -313,7 +373,10 @@ function mapMyIssues(login, nodes) {
       webUrl: truncate(issue.url, FIELD_CAP_URL),
       updatedAt: truncate(issue.updatedAt, FIELD_CAP_TAG),
       isExternal: isExternalOwner(issueOwner, login),
-      owner: issueOwner
+      owner: issueOwner,
+      lastCommenter: issueComment.commenter,
+      lastCommentAt: issueComment.commentAt,
+      subscribed: subscribedFromViewerSubscription(issue.viewerSubscription)
     })
   }
   return myIssues
@@ -389,6 +452,49 @@ function sortRepos(repos, mode) {
     arr.sort(function (a, b) { return pushedAtMs(b) - pushedAtMs(a) })
   }
   return arr
+}
+
+// ------------------------------------------------------- search + filter (G1/G4)
+
+// exchange/26-feedback2-delta-spec.md G1: case-insensitive substring match
+// used by the panel-side search field to live-filter every section's already
+// -rendered rows -- pure and generic over whichever of `title`/`repo`/
+// `owner`/`name` a given item shape actually carries (PR/review-request/
+// issue rows have title+repo+owner; repo-activity rows have name only; a
+// field the item doesn't have is simply skipped, never a thrown error).
+// Empty/whitespace-only query matches everything (the "no filter active"
+// state). `query` is capped to QUERY_CAP *characters* (not bytes) before
+// comparison -- generous for any real typed input, but keeps a pathological
+// huge query string from turning every row's substring scan into needless
+// work; slicing a JS string mid-surrogate-pair is a real edge case for exotic
+// unicode (emoji, some CJK extension characters) but a mid-cap slice search
+// still resolves to a defensible substring match, never a throw.
+function matchesQuery(item, query) {
+  var q = isString(query) ? query.slice(0, QUERY_CAP).trim().toLowerCase() : ""
+  if (!q) return true
+  if (!isObject(item)) return false
+  var fields = [item.title, item.repo, item.owner, item.name]
+  for (var i = 0; i < fields.length; i++) {
+    var f = fields[i]
+    if (isString(f) && f.toLowerCase().indexOf(q) >= 0) return true
+  }
+  return false
+}
+
+// exchange/26-feedback2-delta-spec.md G4: "focus" (default) keeps only
+// myIssues rows the viewer is still subscribed to (`subscribed !== false` --
+// deliberately not `=== true`, so a hand-built/older item missing the field
+// entirely fails open the same way mapMyIssues's own
+// subscribedFromViewerSubscription() does, rather than being silently
+// dropped by a stricter equality check); "all" is a pass-through copy.
+// Any mode other than exactly "all" (including missing/garbage) is treated
+// as "focus" -- same permissive-default-on-garbage-input shape as
+// sortRepos()'s own mode handling above. Always returns a NEW array, never
+// mutates `issues`.
+function filterIssues(issues, mode) {
+  var arr = isArray(issues) ? issues : []
+  if (mode === "all") return arr.slice()
+  return arr.filter(function (i) { return isObject(i) && i.subscribed !== false })
 }
 
 // Raw shape: the parsed body of the mega GraphQL query
@@ -662,8 +768,14 @@ if (typeof module !== "undefined" && module.exports) {
     ownerFromNameWithOwner: ownerFromNameWithOwner,
     isExternalOwner: isExternalOwner,
     mergedSettings: mergedSettings,
+    lastComment: lastComment,
+    subscribedFromViewerSubscription: subscribedFromViewerSubscription,
+    matchesQuery: matchesQuery,
+    filterIssues: filterIssues,
     FIELD_CAP_TEXT: FIELD_CAP_TEXT,
     FIELD_CAP_TAG: FIELD_CAP_TAG,
-    FIELD_CAP_URL: FIELD_CAP_URL
+    FIELD_CAP_URL: FIELD_CAP_URL,
+    FIELD_CAP_COMMENTER: FIELD_CAP_COMMENTER,
+    QUERY_CAP: QUERY_CAP
   }
 }

@@ -299,19 +299,22 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(mapped.openPRs.length, raw.data.viewer.openPRs.nodes.length)
   var pr = mapped.openPRs[0]
   assert.strictEqual(pr.title, "Add Nujabes theme")
-  assert.strictEqual(pr.repo, "omacom-io/omarchy-site")
+  assert.strictEqual(pr.repo, "omacom/omarchy-site")
   assert.strictEqual(pr.number, 77)
-  assert.strictEqual(pr.webUrl, "https://github.com/omacom-io/omarchy-site/pull/77")
+  assert.strictEqual(pr.webUrl, "https://github.com/omacom/omarchy-site/pull/77")
   assert.strictEqual(pr.isDraft, false)
   // statusCheckRollup was null in the real captured sample -- a legitimate
   // empty state (no CI configured), not a query bug (see 04-github-data.md #3).
   assert.strictEqual(pr.ciState, "none")
   assert.strictEqual(pr.reviewDecision, "")
-  // F6: this PR is against a fork of a third-party repo (omacom-io), not
+  // F6: this PR is against a fork of a third-party repo (omacom), not
   // the account's (HalmyLyseas) own -- a real live example of an external
   // PR row, not a fabricated one.
-  assert.strictEqual(pr.owner, "omacom-io")
+  assert.strictEqual(pr.owner, "omacom")
   assert.strictEqual(pr.isExternal, true)
+  // G2: this PR's live `comments(last: 1)` came back empty -- no comment yet.
+  assert.strictEqual(pr.lastCommenter, "")
+  assert.strictEqual(pr.lastCommentAt, "")
 
   assert.strictEqual(mapped.repos.length, raw.data.viewer.repositories.nodes.length)
   var repoWithRelease = mapped.repos.filter(function (r) { return r.name === "VandalHearts-PcPort" })[0]
@@ -353,6 +356,29 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(marketplaceIssue.webUrl, "https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2672")
   assert.strictEqual(marketplaceIssue.owner, "HANCORE-linux")
   assert.strictEqual(marketplaceIssue.isExternal, true)
+  // G4 acceptance evidence (exchange/27-s13-data-delta.md): this account IS
+  // still subscribed to its own marketplace verification issue.
+  assert.strictEqual(marketplaceIssue.subscribed, true)
+  // G2: real live comment on this issue, authored by the account itself.
+  assert.strictEqual(marketplaceIssue.lastCommenter, "HalmyLyseas")
+  assert.strictEqual(marketplaceIssue.lastCommentAt, "2026-08-27T21:47:43Z")
+
+  // G4 acceptance evidence: the human's own clutter example, live-verified
+  // UNSUBSCRIBED -- MUST come back subscribed:false so filterIssues("focus")
+  // hides it by default.
+  var protonIssue = mapped.myIssues.filter(function (i) { return i.number === 8626 })[0]
+  assert.ok(protonIssue, "expected ValveSoftware/Proton#8626 in myIssues")
+  assert.strictEqual(protonIssue.repo, "ValveSoftware/Proton")
+  assert.strictEqual(protonIssue.subscribed, false)
+  assert.strictEqual(protonIssue.lastCommenter, "neidlosEnte7")
+  assert.strictEqual(protonIssue.lastCommentAt, "2026-05-08T20:42:19Z")
+
+  // Every other live myIssues row in the fixture is SUBSCRIBED with no
+  // recent comment of its own.
+  var themeIssue = mapped.myIssues.filter(function (i) { return i.number === 117 })[0]
+  assert.strictEqual(themeIssue.subscribed, true)
+  assert.strictEqual(themeIssue.lastCommenter, "")
+  assert.strictEqual(themeIssue.lastCommentAt, "")
 
   // exchange/23-s11-delta-review.md F2: mapDashboard also returns the
   // viewer's own login straight off the envelope, independent of whether
@@ -708,6 +734,162 @@ test("sortRepos: adversarial -- huge star values, missing/malformed pushedAt, no
   assert.deepStrictEqual(Model.sortRepos(null, "activity"), [])
   assert.deepStrictEqual(Model.sortRepos(undefined, "stars"), [])
   assert.deepStrictEqual(Model.sortRepos("not an array", "activity"), [])
+})
+
+// ---------------------------------------------------------------------- lastComment (G2)
+
+test("lastComment: extracts commenter/commentAt from the single comments(last: 1) node", function () {
+  var c = Model.lastComment({ nodes: [{ author: { login: "octocat" }, updatedAt: "2026-08-27T10:00:00Z" }] })
+  assert.deepStrictEqual(c, { commenter: "octocat", commentAt: "2026-08-27T10:00:00Z" })
+})
+
+test("lastComment: no comments at all -> both fields empty", function () {
+  assert.deepStrictEqual(Model.lastComment({ nodes: [] }), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment(null), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment(undefined), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment({}), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment({ nodes: "not an array" }), { commenter: "", commentAt: "" })
+})
+
+test("lastComment: a deleted GitHub user's comment has author: null -- both fields collapse to empty, not a throw", function () {
+  var c = Model.lastComment({ nodes: [{ author: null, updatedAt: "2026-08-27T10:00:00Z" }] })
+  assert.deepStrictEqual(c, { commenter: "", commentAt: "" })
+})
+
+test("lastComment: adversarial -- missing author.login, non-object node, oversized login capped at FIELD_CAP_COMMENTER", function () {
+  assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: {}, updatedAt: "x" }] }), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment({ nodes: [null] }), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment({ nodes: ["not an object"] }), { commenter: "", commentAt: "" })
+  var hugeLogin = new Array(1000).join("z")
+  var c = Model.lastComment({ nodes: [{ author: { login: hugeLogin }, updatedAt: "2026-01-01T00:00:00Z" }] })
+  assert.strictEqual(c.commenter.length, Model.FIELD_CAP_COMMENTER)
+})
+
+test("lastComment: only the LAST node in the connection is used (last: 1 should already only send one, defend anyway)", function () {
+  var c = Model.lastComment({
+    nodes: [
+      { author: { login: "first" }, updatedAt: "2026-01-01T00:00:00Z" },
+      { author: { login: "second" }, updatedAt: "2026-01-02T00:00:00Z" }
+    ]
+  })
+  assert.strictEqual(c.commenter, "second")
+})
+
+// ------------------------------------------------------------ subscribedFromViewerSubscription (G4)
+
+test("subscribedFromViewerSubscription: SUBSCRIBED -> true, anything else resolved -> false", function () {
+  assert.strictEqual(Model.subscribedFromViewerSubscription("SUBSCRIBED"), true)
+  assert.strictEqual(Model.subscribedFromViewerSubscription("UNSUBSCRIBED"), false)
+  assert.strictEqual(Model.subscribedFromViewerSubscription("IGNORED"), false)
+  assert.strictEqual(Model.subscribedFromViewerSubscription("something-unexpected"), false)
+})
+
+test("subscribedFromViewerSubscription: missing/null field fails OPEN (true) -- a schema hiccup must never hide the user's own issues", function () {
+  assert.strictEqual(Model.subscribedFromViewerSubscription(undefined), true)
+  assert.strictEqual(Model.subscribedFromViewerSubscription(null), true)
+})
+
+// ---------------------------------------------------------------------- matchesQuery (G1)
+
+test("matchesQuery: case-insensitive substring match over title/repo/owner", function () {
+  var item = { title: "Add Nujabes theme", repo: "HalmyLyseas/omarchy-nujabes-theme", owner: "HalmyLyseas" }
+  assert.strictEqual(Model.matchesQuery(item, "nujabes"), true)
+  assert.strictEqual(Model.matchesQuery(item, "NUJABES"), true)
+  assert.strictEqual(Model.matchesQuery(item, "HalmyLyseas"), true)
+  assert.strictEqual(Model.matchesQuery(item, "omarchy-nujabes"), true)
+  assert.strictEqual(Model.matchesQuery(item, "no-match-here"), false)
+})
+
+test("matchesQuery: matches a repo-activity row's `name` field too", function () {
+  var repoItem = { name: "omarchy-nujabes-theme" }
+  assert.strictEqual(Model.matchesQuery(repoItem, "nujabes"), true)
+  assert.strictEqual(Model.matchesQuery(repoItem, "ristretto"), false)
+})
+
+test("matchesQuery: empty/whitespace-only query matches everything, including an item with no matchable fields", function () {
+  assert.strictEqual(Model.matchesQuery({ title: "x" }, ""), true)
+  assert.strictEqual(Model.matchesQuery({ title: "x" }, "   "), true)
+  assert.strictEqual(Model.matchesQuery({ title: "x" }, undefined), true)
+  assert.strictEqual(Model.matchesQuery({ title: "x" }, null), true)
+  assert.strictEqual(Model.matchesQuery({}, ""), true)
+  assert.strictEqual(Model.matchesQuery({ someOtherField: "nujabes" }, ""), true)
+})
+
+test("matchesQuery: item with no matchable fields never matches a real query, never throws", function () {
+  assert.strictEqual(Model.matchesQuery({}, "nujabes"), false)
+  assert.strictEqual(Model.matchesQuery({ someUnrelatedField: 42 }, "nujabes"), false)
+  assert.strictEqual(Model.matchesQuery(null, "nujabes"), false)
+  assert.strictEqual(Model.matchesQuery(undefined, "nujabes"), false)
+  assert.strictEqual(Model.matchesQuery("not an object", "nujabes"), false)
+})
+
+test("matchesQuery: defensive on non-string matchable fields, never throws", function () {
+  var item = { title: 42, repo: null, owner: undefined, name: { nested: true } }
+  assert.strictEqual(Model.matchesQuery(item, "42"), false)
+})
+
+test("matchesQuery: unicode query matches unicode field content", function () {
+  var item = { title: "テーマ: Nujabes 米津玄師", repo: "o/r", owner: "o" }
+  assert.strictEqual(Model.matchesQuery(item, "米津玄師"), true)
+  assert.strictEqual(Model.matchesQuery(item, "テーマ"), true)
+  assert.strictEqual(Model.matchesQuery(item, "café"), false)
+})
+
+test("matchesQuery: query longer than QUERY_CAP is truncated before matching, never throws", function () {
+  var longQuery = new Array(Model.QUERY_CAP + 500).join("a")
+  var item = { title: new Array(Model.QUERY_CAP + 500).join("a") }
+  // Both sides get capped the same way in practice (title itself is capped
+  // at FIELD_CAP_TEXT by the mappers) -- this asserts the query side alone
+  // never throws or hangs on a huge input, whatever it matches to.
+  assert.strictEqual(typeof Model.matchesQuery(item, longQuery), "boolean")
+  assert.strictEqual(Model.matchesQuery({ title: "short" }, longQuery), false)
+})
+
+// ---------------------------------------------------------------------- filterIssues (G4)
+
+function fakeIssue(number, subscribed) {
+  return { number: number, subscribed: subscribed }
+}
+
+test("filterIssues: focus mode keeps only subscribed:true rows", function () {
+  var issues = [fakeIssue(1, true), fakeIssue(2, false), fakeIssue(3, true)]
+  var filtered = Model.filterIssues(issues, "focus")
+  assert.deepStrictEqual(filtered.map(function (i) { return i.number }), [1, 3])
+})
+
+test("filterIssues: all mode is a pass-through copy, unfiltered", function () {
+  var issues = [fakeIssue(1, true), fakeIssue(2, false)]
+  var filtered = Model.filterIssues(issues, "all")
+  assert.deepStrictEqual(filtered.map(function (i) { return i.number }), [1, 2])
+  assert.notStrictEqual(filtered, issues, "must return a new array, not the same reference")
+})
+
+test("filterIssues: unrecognized/missing mode falls back to focus", function () {
+  var issues = [fakeIssue(1, true), fakeIssue(2, false)]
+  assert.deepStrictEqual(Model.filterIssues(issues, "bogus-mode").map(function (i) { return i.number }), [1])
+  assert.deepStrictEqual(Model.filterIssues(issues, undefined).map(function (i) { return i.number }), [1])
+  assert.deepStrictEqual(Model.filterIssues(issues, null).map(function (i) { return i.number }), [1])
+})
+
+test("filterIssues: focus fails OPEN on a row missing the subscribed field entirely (not === false)", function () {
+  var issues = [{ number: 1 }, fakeIssue(2, false)]
+  assert.deepStrictEqual(Model.filterIssues(issues, "focus").map(function (i) { return i.number }), [1])
+})
+
+test("filterIssues: real acceptance data -- Proton#8626 hidden in focus, visible in all", function () {
+  var raw = loadFixture("mega-graphql.json")
+  var mapped = Model.mapDashboard(raw)
+  var focus = Model.filterIssues(mapped.myIssues, "focus")
+  var all = Model.filterIssues(mapped.myIssues, "all")
+  assert.strictEqual(focus.some(function (i) { return i.number === 8626 }), false, "Proton#8626 (unsubscribed) must be hidden by default")
+  assert.strictEqual(all.some(function (i) { return i.number === 8626 }), true, "Proton#8626 must still appear under All")
+  assert.strictEqual(focus.some(function (i) { return i.number === 2672 }), true, "the subscribed marketplace issue stays visible under Focus")
+})
+
+test("filterIssues: defensive on non-array input, never throws", function () {
+  assert.deepStrictEqual(Model.filterIssues(null, "focus"), [])
+  assert.deepStrictEqual(Model.filterIssues(undefined, "all"), [])
+  assert.deepStrictEqual(Model.filterIssues("not an array", "focus"), [])
 })
 
 // ---------------------------------------------------------------------- mergedSettings

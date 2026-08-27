@@ -22,7 +22,8 @@
       "dashboardIntervalSec": 180,
       "notificationsIntervalSec": 60,
       "repoLimit": 10,
-      "repoSort": "activity"
+      "repoSort": "activity",
+      "issuesFilter": "focus"
     },
     "schema": [
       {
@@ -58,6 +59,13 @@
         "label": "Repo sort",
         "options": ["activity", "stars"],
         "defaultValue": "activity"
+      },
+      {
+        "key": "issuesFilter",
+        "type": "enum",
+        "label": "Issues filter",
+        "options": ["focus", "all"],
+        "defaultValue": "focus"
       }
     ]
   }
