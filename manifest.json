@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "halmylyseas.github-status",
   "name": "GitHub Status",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "HalmyLyseas",
   "license": "MIT",
   "description": "Not a notification inbox -- a status-bar dashboard for a solo maintainer's own repos: activity, own open PRs with CI/review state, review requests, alongside notifications. Powered entirely by your authenticated gh CLI.",

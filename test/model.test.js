@@ -775,6 +775,17 @@ test("lastComment: only the LAST node in the connection is used (last: 1 should 
   assert.strictEqual(c.commenter, "second")
 })
 
+// exchange/30-s16-delta-review.md F1: a real author with a missing/null/
+// malformed updatedAt must collapse BOTH fields to "" -- the pairing this
+// function's own header comment documents is symmetric, not just
+// commentAt-follows-commenter.
+test("lastComment: present author, missing/null/non-string updatedAt -- BOTH fields collapse to empty, not just commentAt", function () {
+  assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: { login: "octocat" }, updatedAt: null }] }), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: { login: "octocat" } }] }), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: { login: "octocat" }, updatedAt: 42 }] }), { commenter: "", commentAt: "" })
+  assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: { login: "octocat" }, updatedAt: "" }] }), { commenter: "", commentAt: "" })
+})
+
 // ------------------------------------------------------------ subscribedFromViewerSubscription (G4)
 
 test("subscribedFromViewerSubscription: SUBSCRIBED -> true, anything else resolved -> false", function () {

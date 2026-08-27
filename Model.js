@@ -268,9 +268,15 @@ function lastComment(commentsConn) {
   var author = isObject(node.author) ? node.author : null
   var login = author ? safeStr(author.login, "") : ""
   if (!login) return empty
+  var commentAt = truncate(node.updatedAt, FIELD_CAP_TAG)
+  // A missing/null/non-string updatedAt degrades to "" via safeStr's
+  // fallback -- collapse commenter to "" alongside it too, so the pairing
+  // this function documents above is actually symmetric in code, not just
+  // in this comment (exchange/30-s16-delta-review.md F1).
+  if (!commentAt) return empty
   return {
     commenter: truncate(login, FIELD_CAP_COMMENTER),
-    commentAt: truncate(node.updatedAt, FIELD_CAP_TAG)
+    commentAt: commentAt
   }
 }
 
