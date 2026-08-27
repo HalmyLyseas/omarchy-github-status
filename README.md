@@ -11,8 +11,10 @@ From the bar you can see, at a glance and in one click:
 - Unread GitHub notifications — count in the bar, list in the panel.
 - Your own open PRs, with CI status and review decision.
 - PRs waiting on your review.
+- Open issues you yourself authored, across every repo.
 - Activity across your own repos: latest commit, open issues/PRs, latest
-  release.
+  release — sortable by recent activity or star count, with an
+  archived/fork/private status pill.
 - Click any item to open it on github.com in your browser.
 
 ## Features
@@ -20,14 +22,23 @@ From the bar you can see, at a glance and in one click:
 - **Bar glyph + count pill** for unread notifications, recoloring when any of
   your own open PRs has failing CI or you have a pending review request.
 - **Inbox** — unread notifications with repo, title, reason, and relative
-  time.
+  reception age.
 - **Review requests** — PRs waiting on you, shown ahead of your own PRs
   because someone else is blocked on you.
-- **My open PRs** — title, repo, draft flag, CI rollup, and review decision
-  for every open PR you have across every repo you can access, not just one
-  repo at a time.
-- **Repo activity** — your own repos ordered by most recently pushed, with
-  open issue/PR counts and the latest release tag where one exists.
+- **My open PRs** — title, repo, draft flag, CI rollup, review decision, and
+  relative last-activity age for every open PR you have across every repo
+  you can access, not just one repo at a time.
+- **My open issues** — every issue you yourself opened and is still open,
+  across every repo, with a relative last-activity age.
+- **Repo activity** — your own repos with open issue/PR counts and the
+  latest release tag where one exists. Sort by last activity (default) or
+  star count with a one-click toggle in the section header.
+- **Status pills everywhere** — every section header carries a right-aligned
+  count pill (unread count for Inbox, rendered-list length elsewhere), and a
+  section with nothing in it folds to just that header row — no empty-state
+  filler text. Repo rows get an archived/fork/private pill (archived wins
+  when more than one applies); PR/issue/inbox rows for a repo you don't own
+  get a small pill naming the external owner.
 - **Graceful degradation** — if `gh` isn't installed, isn't signed in, the
   network is down, or you're rate-limited, the panel says so plainly and
   keeps showing your last-known-good data instead of going blank.
@@ -74,6 +85,7 @@ UI in this version):
 | Dashboard refresh interval | 180s | 60–3600s | How often PRs, review requests, and repo activity refresh. |
 | Notifications poll interval | 60s | 60–600s | How often the notifications inbox polls. Matches GitHub's own guidance; conditional requests mean an unchanged inbox costs nothing. |
 | Repos shown in activity list | 10 | 3–30 | How many of your repos appear in the activity section. |
+| Repo sort | Last activity | Last activity / Stars | Order of the repo activity list — also toggleable from the panel's Repo activity section header. |
 
 ## Security & privacy
 

@@ -15,9 +15,10 @@ treat them as evidence, not as something a fresh clone needs to have.
 |---|---|
 | `Service.qml` | The data layer and the only owner of machine-wide state: every `Process`, `Timer`, and piece of mutable data lives here. Loaded once by the shell (`kinds: ["service", ...]`, `keepLoaded: true`). |
 | `BarWidget.qml` | The bar button. Eager-`Loader`-hosted panel, GitHub octicon + count pill. One instance **per monitor** — reads `Service.qml`'s public properties, owns none of its own. |
-| `Panel.qml` | The popup UI: hero, degradation hint, four sections (inbox, review requests, open PRs, repo activity). One instance **per monitor**, same as `BarWidget.qml`. Binds to the service; writes nothing back to it except calling `refresh()`/`openUrl()`. |
-| `Model.js` | Pure logic, no Quickshell imports, ES5-compatible so plain Node can `require()` it: every `gh` JSON → UI-shape mapping function, the URL allowlist, the failure classifier, field/list caps. Fully unit-testable without a running shell. |
-| `scripts/fetch-dashboard` | `bash`: `exec gh api graphql` with the combined query (openPRs + repos + review-requests) embedded as a fixed string. |
+| `Panel.qml` | The popup UI: hero, degradation hint, five sections (inbox, review requests, open PRs, open issues, repo activity). One instance **per monitor**, same as `BarWidget.qml`. Binds to the service; writes nothing back to it except calling `refresh()`/`openUrl()`/`setRepoSort()`. |
+| `SectionHeader.qml` | v1.1: kit-styled section header (label + right-aligned count/`"…"` pill, optional `extra` slot) shared by all five `Panel.qml` sections; also where the F1 recent/stars toggle is instantiated for the repo-activity header. |
+| `Model.js` | Pure logic, no Quickshell imports, ES5-compatible so plain Node can `require()` it: every `gh` JSON → UI-shape mapping function, the URL allowlist, the failure classifier, field/list caps, and (v1.1) `repoPill`/`sortRepos`/`ownerFromNameWithOwner`/`isExternalOwner`/`mergedSettings`. Fully unit-testable without a running shell. |
+| `scripts/fetch-dashboard` | `bash`: `exec gh api graphql` with the combined query (openPRs + repos + review-requests + v1.1's `myIssues`) embedded as a fixed string. |
 | `scripts/fetch-notifications` | `bash`: `exec gh api -i notifications [-H "If-None-Match: $1"]` — the ETag is the one remote-derived script argument anywhere in this plugin. |
 | `scripts/probe-auth` | `bash`: `gh api user --jq .login` under `timeout 25`, translated to one of five stable exit codes. Does **not** call `gh auth status` (see below). |
 
@@ -148,10 +149,12 @@ Nothing in either UI file spawns a process, opens a URL, or touches
 
 - **`Text.PlainText` on every GitHub-controlled string; `SafeToolTip`
   instead of the first-party tooltip.** `Panel.qml` sets `textFormat:
-  Text.PlainText` + `elide: Text.ElideRight` on all 12 `Text` elements that
-  render remote-derived fields (notification/PR/review-request/repo
-  title/reason/meta text) — grep-provable
-  (`grep -c 'textFormat: Text.PlainText' Panel.qml` → 12). This exists
+  Text.PlainText` + `elide: Text.ElideRight` on every `Text` element that
+  renders a remote-derived field (notification/PR/review-request/issue/repo
+  title/reason/meta/age/owner text) — grep-provable
+  (`grep -c 'textFormat: Text.PlainText' Panel.qml` → 19 as of the v1.1
+  delta, up from 12 pre-delta; `SectionHeader.qml` adds one more for its
+  synthesized — not remote, but PlainText as policy — count pill). This exists
   because the closest sibling plugin, `viniciusfnery.github-inbox`, was
   flagged in its own marketplace maintainer review for rendering
   GitHub-controlled notification titles through a component that
@@ -167,6 +170,40 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   directly on remote-derived text in this file** — `grep -n PanelToolTip
   Panel.qml` should only ever match the comments explaining why
   `SafeToolTip` exists, never an actual instantiation.
+
+- **`viewer.issues(states: OPEN, ...)` with no `filterBy` is already
+  authored-scoped — no `search author:@me` fallback needed.** v1.1's F3
+  ("issues opened by the user") needed the query's exact semantics
+  live-verified, not assumed: is `viewer.issues` "issues assigned to the
+  viewer's repos" or "issues the viewer themselves authored"? A read-only
+  `gh api graphql` probe against the real account
+  (`exchange/20-s8-data-delta.md`) returned 5 issues across 5 different
+  repos the account doesn't own, every one with `author.login ===
+  viewer.login` — conclusively authored-scoped, the same shape `viewer.
+  pullRequests` (the existing `openPRs` connection) already has. The spec's
+  documented fallback, `search(query: "is:open is:issue author:@me", type:
+  ISSUE)`, bills GraphQL's stricter `search` rate-limit bucket (the same
+  concern already on record for `reviewRequests`) and was never needed.
+  `scripts/fetch-dashboard` adds this as `myIssues: issues(...)`, aliased
+  the same way `openPRs`/`repos` are, in the same single query. If GitHub
+  ever changes this connection's semantics, the fallback in
+  `exchange/19-feedback-delta-spec.md` is the documented next step — verify
+  live again before switching, the same way this decision itself was made.
+
+- **`sortRepos` is a client-side sort over the already-fetched 20-repo
+  query window, not a second query.** F1 ("sort by last activity or
+  stars") sorts whatever `repositories(first: 20, ...)` already returned in
+  `Model.js`, then `Service.qml` slices to `repoLimit` (3–30) at read time —
+  changing `repoSort` re-orders instantly with no new `gh` call. This is
+  correct at this project's scale (a solo maintainer's own repo count) but
+  is a real limitation: a star-sort over an account with *more* than 20
+  repos would only ever consider the 20 most-recently-pushed (the query's
+  fixed `orderBy`), never the account's actual highest-starred repo if it
+  happens to sit outside that window. Documented here rather than fixed
+  because widening or re-querying per sort mode is out of scope for a
+  status-bar panel capped at 30 visible rows anyway — flag this file if the
+  repo cap or the query's `first:` value ever changes without checking
+  whether this note still holds.
 
 - **The probe watchdog, and why `probe-auth` needs its own `timeout 25`.**
   `dashboardProc`/`notificationsProc` both `exec gh ...` directly in their
@@ -280,7 +317,7 @@ Nothing in either UI file spawns a process, opens a URL, or touches
 
   ```bash
   mkdir -p /tmp/qmlroot && ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
-  /usr/lib/qt6/bin/qmllint -I /tmp/qmlroot -I /usr/share/omarchy/shell Service.qml BarWidget.qml Panel.qml
+  /usr/lib/qt6/bin/qmllint -I /tmp/qmlroot -I /usr/share/omarchy/shell Service.qml BarWidget.qml Panel.qml SectionHeader.qml
   ```
 
   Expected clean baseline for this codebase (matches the marketplace-
