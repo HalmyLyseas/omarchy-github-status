@@ -68,6 +68,22 @@
 //     Model.mapNotifications so notification rows can derive `isExternal`/
 //     `owner` (F6) -- the REST notifications payload has no `viewer`-shaped
 //     field to read a login from itself.
+//
+// S12 fix pass (exchange/23-s11-delta-review.md, applying the PM's binding
+// fix decisions in exchange/24-s12-release.md):
+//   - F1: `dashboardLastSyncMs`/`notificationsLastSyncMs` added as public,
+//     per-source sync markers (`lastSyncMs` above stays the blended one, for
+//     the hero only) -- Panel.qml gates each SectionHeader's "…"-vs-
+//     confirmed-"0" pill on the ONE source that actually backs that
+//     section, not the two independently-timed pollers' Math.max.
+//   - F2: `internal.login` can now be learned two ways instead of one --
+//     (a) opportunistically off any dashboard response's own viewer.login
+//     (handleDashboardExit), (b) reProbeTimer is kept alive
+//     (maybeRearmReProbeForLogin) after a non-auth probe failure/watchdog
+//     timeout specifically to keep retrying login capture, decoupled from
+//     whether the pollers are already running.
+//   - F3: accepted as a note, not fixed -- see docs/developers.md's
+//     "Accepted risks".
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -93,8 +109,25 @@ Item {
   readonly property string status: computeStatus()
   // Bumped by ANY source's success, including a notifications 304 --
   // 06-design.md's contract is "last time we successfully synced with
-  // GitHub", not "last time a specific poller succeeded".
+  // GitHub", not "last time a specific poller succeeded". Used for the
+  // panel's hero "Synced Xm ago" line -- NOT for per-section "…"-vs-
+  // confirmed-"0" pill gating (see the two per-source properties below;
+  // exchange/23-s11-delta-review.md F1).
   readonly property double lastSyncMs: Math.max(internal.dashboardLastSyncMs, internal.notifLastSyncMs)
+  // exchange/23-s11-delta-review.md F1: per-source sync markers, exposed
+  // publicly so Panel.qml can gate each SectionHeader's "…"-vs-confirmed-"0"
+  // pill on the ONE source that actually backs that section, instead of the
+  // blended `lastSyncMs` above. Both pollers fire on essentially every cold
+  // start in the same JS tick (`triggeredOnStart: true` on both timers,
+  // below) and race independently -- gating all five sections on whichever
+  // one happens to finish first meant up to four sections could show a
+  // false confirmed-"0" (their own backing arrays still at the untouched
+  // `[]` startup default) the moment the OTHER poller's fetch won the race.
+  // Inbox is the only section backed by the notifications poller; Review
+  // requests/My PRs/My issues/Repo activity are all backed by the single
+  // combined dashboard fetch.
+  readonly property double dashboardLastSyncMs: internal.dashboardLastSyncMs
+  readonly property double notificationsLastSyncMs: internal.notifLastSyncMs
   readonly property string rateLimitedUntil: pickRateLimitedUntil()
   readonly property bool busy: dashboardProc.running || notificationsProc.running
 
@@ -614,7 +647,28 @@ Item {
       reProbeTimer.restart()
     } else {
       internal.pollersActive = true
+      maybeRearmReProbeForLogin()
     }
+  }
+
+  // exchange/23-s11-delta-review.md F2: a probe failure classified as
+  // offline/rate-limited/error (i.e. NOT no-gh/unauthenticated -- those
+  // branches above already restart reProbeTimer for their own reason, to
+  // unblock the pollers) used to leave internal.login unset for the rest of
+  // the session with nothing left to ever retry capturing it, since
+  // reProbeTimer's only other restart sites are the no-gh/unauthenticated
+  // branches. The ordinary trigger is exactly the boring case -- network
+  // not up yet at shell startup/resume-from-suspend, so probe-auth's very
+  // first attempt times out into probeWatchdog or fails with a transient
+  // "offline"/"error" classification -- not a rare edge case. This keeps
+  // the slow (5min) re-probe cadence alive purely to retry learning the
+  // login, without re-blocking the pollers (already set active by the
+  // caller before this runs): once internal.login is non-empty, this is a
+  // no-op forever, including via the opportunistic dashboard-response
+  // capture in handleDashboardExit, which is the more common way login
+  // actually ends up populated once the pollers are running.
+  function maybeRearmReProbeForLogin() {
+    if (!internal.login) reProbeTimer.restart()
   }
 
   Timer {
@@ -637,6 +691,11 @@ Item {
         // Never block polling on an inconclusive/timed-out probe alone --
         // let the real pollers discover the true state for themselves.
         internal.pollersActive = true
+        // exchange/23-s11-delta-review.md F2: same reasoning as
+        // maybeRearmReProbeForLogin's own comment -- a hung probe (this
+        // watchdog's whole reason for existing) is exactly the scenario
+        // where the login never gets learned otherwise.
+        root.maybeRearmReProbeForLogin()
       }
     }
   }
@@ -701,13 +760,39 @@ Item {
     if (exitCode === 0) {
       var parsed = null
       try { parsed = JSON.parse(rawOut) } catch (e) { parsed = null }
-      var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null, myIssues: null }
+      var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
       var gotSomething = mapped.openPRs !== null || mapped.reviewRequests !== null || mapped.repos !== null || mapped.myIssues !== null
       if (gotSomething) {
         if (mapped.openPRs !== null) internal.openPRs = mapped.openPRs
         if (mapped.reviewRequests !== null) internal.reviewRequests = mapped.reviewRequests
         if (mapped.repos !== null) internal.repos = mapped.repos
         if (mapped.myIssues !== null) internal.myIssues = mapped.myIssues
+        // exchange/23-s11-delta-review.md F2 (part a): opportunistic login
+        // capture. Every dashboard response carries viewer.login whenever
+        // any viewer-scoped section resolved -- a free, no-extra-call way
+        // to learn internal.login if the auth probe itself never got the
+        // chance to (its own first attempt failed non-auth, or hung into
+        // probeWatchdog -- see handleProbeResult/probeWatchdog's
+        // maybeRearmReProbeForLogin calls for the other half of this fix).
+        // Only ever sets FROM empty -- never overwrites an already-known
+        // login (the probe's own value, once learned, stays authoritative;
+        // exchange/23 F3 is the accepted-risk note on stale logins across a
+        // mid-session `gh` account switch, documented in developers.md).
+        if (mapped.login && !internal.login) {
+          internal.login = mapped.login
+          log("login learned opportunistically from dashboard response: " + internal.login)
+          // Re-map isExternal on whatever notifications are already held in
+          // memory, once, so already-fetched inbox rows don't have to wait
+          // out a full notificationsIntervalSec poll to gain a correct
+          // owner pill. Cheap: internal.notifications is the already-mapped
+          // list (Service.qml never retains the raw REST body past
+          // handleNotificationsExit), and every item already carries its
+          // own `owner` field independent of login -- see
+          // Model.remapNotificationsExternal's own header comment.
+          if (internal.notifications.length > 0) {
+            internal.notifications = Model.remapNotificationsExternal(internal.notifications, internal.login)
+          }
+        }
         if (parsed && parsed.errors) {
           log("dashboard fetch: partial GraphQL errors -- kept the section(s) that parsed, "
             + "discarded the rest: " + briefJson(parsed.errors))

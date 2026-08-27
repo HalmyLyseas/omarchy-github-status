@@ -234,6 +234,68 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   `internal.pollersActive = true` so the real pollers get to determine the
   true state themselves rather than waiting on an inconclusive probe.
 
+- **F4's "…"-vs-confirmed-"0" pill is gated per-source, not on the blended
+  `lastSyncMs`.** (`exchange/23-s11-delta-review.md` F1, fixed in S12.)
+  `dashboardTimer`/`notificationsTimer` both have `triggeredOnStart: true`
+  and both start the instant `internal.pollersActive` flips true — on
+  essentially every cold start they fire their first fetch in the same JS
+  tick and race two genuinely independent, differently-shaped `gh` calls
+  (one combined GraphQL query vs. one lightweight REST GET) with no
+  ordering guarantee. The original implementation gated all five
+  `SectionHeader`s' "…" state on one property (`Panel.qml`'s `root.synced`,
+  `!!svc && svc.lastSyncMs !== 0`) — `lastSyncMs` is `Math.max` of the two
+  pollers' own sync times, so it flips true the moment EITHER poller
+  succeeds. Whichever poller lost the race then had up to four sections
+  (or one, in the symmetric case) show a real `count === 0` fold — "0", not
+  "…" — for data that had never actually been fetched, exactly the false
+  "confirmed empty" state F4 was specced to prevent. `Service.qml` now
+  exposes `dashboardLastSyncMs`/`notificationsLastSyncMs` (public, alongside
+  the still-blended `lastSyncMs`, which stays the hero's "Synced Xm ago"
+  signal — nothing there needed to change), and `Panel.qml` gates each
+  `SectionHeader` on the one source that actually backs it: `notifSynced`
+  for Inbox, `dashboardSynced` for the other four. See
+  `exchange/24-s12-release.md` for the cold-start probe evidence (both
+  orderings of the race, before/after).
+
+- **`internal.login` can now be learned two ways, not one — and why the
+  second way is a one-shot re-map, not a live re-derivation.**
+  (`exchange/23-s11-delta-review.md` F2, fixed in S12.) Previously,
+  `internal.login` was set only inside `handleProbeResult`'s `exitCode ===
+  0` branch — if the very first auth probe failed with a non-auth
+  classification (`"offline"`/`"rate-limited"`/`"error"`, all reachable from
+  `probe-auth`'s generic exit-5 bucket) or hung into `probeWatchdog`, the
+  pollers still started (correct — never block polling on the probe alone),
+  but nothing ever scheduled another probe attempt, since `reProbeTimer`'s
+  only other restart sites are the no-gh/unauthenticated branches. F6's
+  owner pill on every Inbox row silently and permanently disabled
+  (`isExternalOwner`'s conservative default treats an unknown login as
+  "never external") for the rest of the session — no self-heal short of a
+  restart. The realistic trigger ("the network isn't up yet at shell
+  startup or resume-from-suspend") is the ordinary case, not an edge case —
+  the exact scenario `exchange/12-s5b-correctness-review.md` Finding 1
+  already flagged for the probe hanging in the first place. Two-part fix:
+  (a) `handleDashboardExit` opportunistically captures `internal.login` off
+  `Model.mapDashboard`'s new `login` return field (every dashboard response
+  carries `viewer.login` whenever any viewer-scoped section resolved — a
+  free read, no extra `gh` call) whenever `internal.login` is still empty;
+  (b) `maybeRearmReProbeForLogin()` restarts `reProbeTimer` (the existing
+  5-minute "slow re-probe" cadence, not a new faster one) after a non-auth
+  probe failure or watchdog timeout, purely to keep retrying login capture,
+  independent of `pollersActive`. Both capture sites are guarded to set
+  `internal.login` **only from empty**, never overwrite an already-known
+  value — this is deliberate, not an oversight: it keeps the fix from
+  fighting the F3 accepted-risk tradeoff below (a live re-derivation on
+  every dashboard response would "fix" F3 but reopen it as a
+  correctness/trust question — which source wins if the probe and the
+  dashboard ever briefly disagree — that's out of scope for a targeted
+  fix). Because `internal.notifications` only ever holds the already-mapped
+  list (the raw REST body is never retained past `handleNotificationsExit`,
+  by design — see the ETag/304 note above), the one-shot re-map after (a)
+  learns the login re-derives `isExternal` from each item's own already-
+  known `owner` field (`Model.remapNotificationsExternal`) rather than
+  waiting out a full `notificationsIntervalSec` poll or needing to retain a
+  second copy of raw data anywhere.
+
 ## Accepted risks (documented, not fixed)
 
 - **`StdioCollector` has no byte ceiling.** Every `Process`'s stdout is
@@ -269,6 +331,36 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   notifications, so it never exercised the pill live. If you touch this
   geometry, re-run a similar fabricated-data visual pass rather than trusting
   the live account to ever produce a large count.
+
+- **`internal.login` never refreshes once known — a mid-session `gh` account
+  switch leaves F6's owner pills using the stale identity until a restart.**
+  (`exchange/23-s11-delta-review.md` F3, S12's binding disposition: accepted
+  as a note, not fixed.) `internal.login` can be set two ways
+  (`Service.qml`'s `handleProbeResult` on a successful probe, and S12's own
+  F2 fix — `handleDashboardExit`'s opportunistic capture off a dashboard
+  response's `viewer.login`) but both are guarded to only ever set it FROM
+  empty (`if (login) internal.login = login` / `if (mapped.login &&
+  !internal.login)`) — deliberately, so a stray/wrong value never clobbers
+  an already-known-good login. The consequence, traced through the actual
+  F2 fix rather than assumed: if the authenticated `gh` identity changes
+  mid-session (`gh auth login` as a different user, out of this project's
+  read-only threat model but plausible as an operator action), every
+  subsequent probe success AND every subsequent dashboard response's own
+  `viewer.login` is silently ignored by both capture sites — `internal.login`
+  stays pinned to the pre-switch identity for the rest of the session, and
+  Inbox/PR/issue rows' `isExternal`/`owner` marking (case-insensitive
+  compare against the stale login, `Model.js:93-98`) misclassifies exactly
+  as `exchange/23` originally flagged: rows now owned by the new account
+  wrongly show an owner pill, rows matching the *old* login wrongly show
+  none. **This is unchanged by the F2 fix, by design** — F2 solves "never
+  learned at all", not "learned once, now wrong"; solving the latter would
+  mean trusting a live re-derivation over the probe's own authoritative
+  value, reopening exactly the "re-mapping storm" risk the guard exists to
+  avoid. Narrow, cosmetic-only (no crash, no wrong data fetched, `gh` itself
+  is still the authenticated identity actually used for every real API
+  call), self-corrects on the next shell/plugin restart. Mirrors the
+  already-accepted "ETag never resets on an auth-state transition" note in
+  `exchange/11-s5a-security-review.md` F4 — same severity class.
 
 ## Workflow traps (each one cost real time)
 

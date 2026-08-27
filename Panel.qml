@@ -20,6 +20,11 @@
 //     recent/stars sort toggle wired to svc.repoSort/setRepoSort (F1).
 //   - New "MY OPEN ISSUES" section (svc.myIssues) between My PRs and Repo
 //     activity (F3).
+//
+// S12 fix (exchange/23-s11-delta-review.md F1): each SectionHeader's
+// "synced" is now sourced per-section (root.notifSynced for Inbox,
+// root.dashboardSynced for the other four) instead of one blended
+// root.synced -- see those properties' own header comment below.
 // This file codes only against the Service public API contract -- the v1
 // surface frozen in 06-design.md, plus the v1.1 additions specified in
 // 19-feedback-delta-spec.md (S8 owns landing them in Service.qml/Model.js).
@@ -107,10 +112,18 @@ Panel {
   readonly property var myIssues: svc && svc.myIssues ? svc.myIssues : []
   readonly property var repos: svc && svc.repos ? svc.repos : []
 
-  // "…" pill state (F4/SectionHeader) -- svc.lastSyncMs === 0 is the
-  // service's own "never synced yet" signal (same one lastSyncLabel() below
-  // already reads); a null svc is equally "not synced" from the panel's POV.
-  readonly property bool synced: !!svc && Number(svc.lastSyncMs) !== 0
+  // "…" pill state (F4/SectionHeader) -- per-source, NOT the blended
+  // svc.lastSyncMs (exchange/23-s11-delta-review.md F1): both pollers fire
+  // on essentially every cold start in the same JS tick, and race
+  // independently. Gating every section on whichever one happens to finish
+  // first meant up to four sections could show a false confirmed-"0" (their
+  // own backing arrays still empty) the instant the OTHER poller won the
+  // race. Inbox is backed by the notifications poller only; Review
+  // requests/My PRs/My issues/Repo activity are all backed by the single
+  // combined dashboard fetch. A null svc is "not synced" on both, same as
+  // before.
+  readonly property bool dashboardSynced: !!svc && Number(svc.dashboardLastSyncMs) !== 0
+  readonly property bool notifSynced: !!svc && Number(svc.notificationsLastSyncMs) !== 0
 
   readonly property string repoSort: svc && svc.repoSort ? String(svc.repoSort) : "activity"
 
@@ -323,7 +336,7 @@ Panel {
               // spec calls out unreadCount specifically as the source
               // (exchange/19-feedback-delta-spec.md F4).
               count: svc ? (Number(svc.unreadCount) || 0) : 0
-              synced: root.synced
+              synced: root.notifSynced
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -349,7 +362,7 @@ Panel {
             SectionHeader {
               text: "REVIEW REQUESTS"
               count: root.reviewRequests.length
-              synced: root.synced
+              synced: root.dashboardSynced
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -375,7 +388,7 @@ Panel {
             SectionHeader {
               text: "MY OPEN PULL REQUESTS"
               count: root.openPRs.length
-              synced: root.synced
+              synced: root.dashboardSynced
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -404,7 +417,7 @@ Panel {
             SectionHeader {
               text: "MY OPEN ISSUES"
               count: root.myIssues.length
-              synced: root.synced
+              synced: root.dashboardSynced
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -430,7 +443,7 @@ Panel {
             SectionHeader {
               text: "REPO ACTIVITY"
               count: root.repos.length
-              synced: root.synced
+              synced: root.dashboardSynced
               foreground: root.foreground
               fontFamily: root.fontFamily
               // F1: compact recent/stars sort toggle, left of the count

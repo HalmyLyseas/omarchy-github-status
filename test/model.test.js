@@ -239,6 +239,38 @@ test("mapNotifications: missing/malformed repository.full_name -- owner is empty
   })
 })
 
+// ---------------------------------------------------- remapNotificationsExternal (S12/F2)
+
+test("remapNotificationsExternal: re-derives isExternal from each item's own owner, leaves every other field untouched", function () {
+  var before = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "own repo", url: "" }, repository: { full_name: "HalmyLyseas/VandalHearts-PcPort" }, updated_at: "2026-01-01T00:00:00Z" },
+    { id: "2", unread: false, subject: { title: "external repo", url: "" }, repository: { full_name: "octocat/Hello-World" }, updated_at: "2026-01-02T00:00:00Z" }
+  ])
+  // No login was known yet -- both items came back non-external.
+  assert.strictEqual(before[0].isExternal, false)
+  assert.strictEqual(before[1].isExternal, false)
+
+  var after = Model.remapNotificationsExternal(before, "HalmyLyseas")
+  assert.strictEqual(after[0].isExternal, false, "own repo still not external")
+  assert.strictEqual(after[1].isExternal, true, "external repo now correctly flagged, using the owner already carried on the item")
+  // Every other field is identical, not just equal-looking (same id/title/etc).
+  assert.strictEqual(after[0].id, before[0].id)
+  assert.strictEqual(after[0].title, before[0].title)
+  assert.strictEqual(after[0].owner, before[0].owner)
+  assert.strictEqual(after[1].webUrl, before[1].webUrl)
+  assert.strictEqual(after[1].updatedAt, before[1].updatedAt)
+  // Original array/items are not mutated in place.
+  assert.strictEqual(before[1].isExternal, false, "input array must not be mutated")
+  assert.notStrictEqual(after, before)
+})
+
+test("remapNotificationsExternal: non-array / adversarial input never throws", function () {
+  assert.deepStrictEqual(Model.remapNotificationsExternal(null, "x"), [])
+  assert.deepStrictEqual(Model.remapNotificationsExternal(undefined, "x"), [])
+  assert.deepStrictEqual(Model.remapNotificationsExternal("not an array", "x"), [])
+  assert.deepStrictEqual(Model.remapNotificationsExternal([null, "garbage", 5], "x"), [null, "garbage", 5])
+})
+
 // ------------------------------------------------------------------- ciRollupToState
 
 test("ciRollupToState: maps every documented state", function () {
@@ -321,6 +353,22 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(marketplaceIssue.webUrl, "https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2672")
   assert.strictEqual(marketplaceIssue.owner, "HANCORE-linux")
   assert.strictEqual(marketplaceIssue.isExternal, true)
+
+  // exchange/23-s11-delta-review.md F2: mapDashboard also returns the
+  // viewer's own login straight off the envelope, independent of whether
+  // any individual section resolved -- Service.qml's opportunistic capture
+  // (handleDashboardExit) reads this.
+  assert.strictEqual(mapped.login, raw.data.viewer.login)
+  assert.ok(mapped.login, "expected a non-empty login in the real fixture")
+})
+
+test("mapDashboard: login field -- present when viewer.login is set, empty string when missing/malformed, never null", function () {
+  assert.strictEqual(Model.mapDashboard({ data: { viewer: { login: "HalmyLyseas" } } }).login, "HalmyLyseas")
+  assert.strictEqual(Model.mapDashboard({ data: { viewer: {} } }).login, "")
+  assert.strictEqual(Model.mapDashboard({ data: { viewer: { login: 42 } } }).login, "")
+  assert.strictEqual(Model.mapDashboard({ data: { viewer: null } }).login, "")
+  assert.strictEqual(Model.mapDashboard({ data: {} }).login, "")
+  assert.strictEqual(Model.mapDashboard(null).login, "")
 })
 
 test("mapDashboard: real review-requests-graphql empty-inbox fixture maps to []", function () {
@@ -354,7 +402,7 @@ test("mapDashboard: non-object / malformed input returns all-null per-section sh
   // []) when it did not resolve at all -- that's the explicit "don't
   // replace" signal the Service layer relies on. An envelope with no
   // usable `data` at all (these cases) means all three sections are null.
-  var allNull = { openPRs: null, reviewRequests: null, repos: null, myIssues: null }
+  var allNull = { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
   assert.deepStrictEqual(Model.mapDashboard(null), allNull)
   assert.deepStrictEqual(Model.mapDashboard(undefined), allNull)
   assert.deepStrictEqual(Model.mapDashboard("not json"), allNull)
@@ -398,7 +446,7 @@ test("mapDashboard: fully-successful envelope with a coexisting (unrelated/empty
     },
     errors: []
   })
-  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [] })
+  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [], login: "me" })
 })
 
 test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewRequests 20, repos 30, myIssues 20)", function () {
@@ -432,7 +480,7 @@ test("mapDashboard: tolerates non-array `nodes` fields", function () {
       reviewRequests: { nodes: 42 }
     }
   })
-  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [] })
+  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [], login: "" })
 })
 
 test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-review.md F2)", function () {

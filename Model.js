@@ -188,6 +188,40 @@ function mapNotifications(json, login) {
   return out
 }
 
+// exchange/23-s11-delta-review.md F2: re-derives `isExternal` for an
+// already-mapped notifications array without re-fetching or re-parsing the
+// raw REST payload (Service.qml never retains that past
+// handleNotificationsExit -- only the mapped list survives in
+// internal.notifications). Every mapped item already carries its own
+// `owner` field (computed independent of `login`, straight off the repo's
+// nameWithOwner), so this is a pure, cheap re-derivation over data already
+// in memory -- used once, the moment internal.login transitions from
+// unknown to known via the opportunistic dashboard-response capture (see
+// Service.qml's handleDashboardExit), so already-fetched inbox rows don't
+// have to wait out a full notificationsIntervalSec poll to gain a correct
+// owner pill. Manual field copy, not Object.assign -- this file stays
+// ES5-compatible (see header comment) so plain Node can require() it.
+function remapNotificationsExternal(list, login) {
+  if (!isArray(list)) return []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    if (!isObject(item)) { out.push(item); continue }
+    out.push({
+      id: item.id,
+      unread: item.unread,
+      reason: item.reason,
+      title: item.title,
+      repo: item.repo,
+      webUrl: item.webUrl,
+      updatedAt: item.updatedAt,
+      isExternal: isExternalOwner(item.owner, login),
+      owner: item.owner
+    })
+  }
+  return out
+}
+
 // ------------------------------------------------------------- CI rollup
 
 // Accepts either a bare rollup state string ("SUCCESS"/"FAILURE"/...) or an
@@ -377,14 +411,23 @@ function sortRepos(repos, mode) {
 // myIssues section). A whole-envelope failure (non-object `json`,
 // missing/non-object `json.data`) returns all four as null, which is the
 // correct "nothing usable" case the caller treats as a full fetch failure.
+//
+// `login` (exchange/23-s11-delta-review.md F2): also returned, always a
+// string ("" when unresolvable) -- never null, unlike the four section
+// keys, since it isn't subject to the same partial-envelope replace
+// contract. This lets Service.qml opportunistically learn internal.login
+// from an ordinary dashboard response's own viewer.login field when the
+// auth probe itself never got the chance to (its first attempt failed
+// non-auth, or timed out into the watchdog) -- see handleDashboardExit.
 function mapDashboard(json) {
-  var result = { openPRs: null, reviewRequests: null, repos: null, myIssues: null }
+  var result = { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
   if (!isObject(json)) return result
   var data = isObject(json.data) ? json.data : null
   if (!data) return result
 
   var viewer = isObject(data.viewer) ? data.viewer : null
   var login = viewer ? safeStr(viewer.login, "") : ""
+  result.login = login
   if (viewer && isObject(viewer.openPRs)) {
     result.openPRs = mapOpenPRs(login, viewer.openPRs.nodes)
   }
@@ -603,6 +646,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     apiUrlToWebUrl: apiUrlToWebUrl,
     mapNotifications: mapNotifications,
+    remapNotificationsExternal: remapNotificationsExternal,
     mapDashboard: mapDashboard,
     ciRollupToState: ciRollupToState,
     relativeTime: relativeTime,
