@@ -4,7 +4,7 @@ Not a notification inbox — a status-bar dashboard for a solo maintainer's own
 repos: activity, own open PRs with CI/review state, review requests,
 alongside notifications.
 
-<!-- TODO: preview.png screenshot goes here once the panel UI (stage S3) exists. -->
+![GitHub Status bar widget and panel](preview.png)
 
 From the bar you can see, at a glance and in one click:
 
