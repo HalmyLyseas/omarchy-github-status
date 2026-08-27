@@ -92,6 +92,17 @@ UI in this version):
   it, and that open never goes through a shell — no other host or scheme is
   ever launched.
 
+## Removal
+
+```bash
+omarchy plugin remove halmylyseas.github-status
+```
+
+This disables the plugin and deletes its folder. Since nothing here is
+written to disk in the first place (no disk cache, no settings UI beyond
+Omarchy's own bar-widget form), there's nothing else to clean up — removal
+just stops the bar glyph and its background polling.
+
 ## License
 
 [MIT](LICENSE)
