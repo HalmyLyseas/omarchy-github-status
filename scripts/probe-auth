@@ -18,10 +18,25 @@
 #   4  unauthenticated   -- `gh` ran but the API call reports bad/missing
 #                           credentials (HTTP 401 / "Bad credentials")
 #   5  offline/other     -- any other failure (network unreachable, rate
-#                           limited, transient error, etc.) -- callers
-#                           should still run classifyFailure on the captured
-#                           stderr text for the fine-grained state, this
-#                           exit code is only a coarse "not exit 0/3/4" bucket
+#                           limited, transient error, timed out, etc.) --
+#                           callers should still run classifyFailure on the
+#                           captured stderr text for the fine-grained state,
+#                           this exit code is only a coarse "not exit 0/3/4"
+#                           bucket
+#
+# `timeout 25` (S6 fix, exchange/14-s6-fixes.md, closing a gap
+# exchange/12-s5b-correctness-review.md Finding 1 flagged as a "compounding
+# note"): this script does NOT `exec` its `gh api user` call (it can't --
+# the output needs to be captured and branched on), so the PID Service.qml's
+# Process tracks is this script's own bash process, one generation above
+# the actual `gh` child. Without this, Service.qml's 30s probeWatchdog
+# force-stopping the tracked PID would unwedge the QML side (verified live,
+# see exchange/14-s6-fixes.md) but leave the real hung `gh api user` call
+# running as an orphaned process. `timeout 25` (under the QML watchdog's
+# 30s, so this fires first in the ordinary case and actually kills `gh`
+# itself, with the QML watchdog remaining a pure backstop for anything this
+# doesn't catch) makes this script self-bounding the same way
+# fetch-dashboard/fetch-notifications already are via `exec`.
 set -euo pipefail
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -29,7 +44,7 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 3
 fi
 
-if output="$(gh api user --jq .login 2>&1)"; then
+if output="$(timeout 25 gh api user --jq .login 2>&1)"; then
   echo "$output"
   exit 0
 fi

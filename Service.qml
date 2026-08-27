@@ -29,6 +29,29 @@
 //     verified it.
 //   - openUrl() allowlists to Model.isSafeGithubUrl() and always spawns via
 //     Quickshell.execDetached's array form (no shell).
+//
+// S6 fix pass (exchange/14-s6-fixes.md, applying exchange/11-s5a-security-
+// review.md and exchange/12-s5b-correctness-review.md):
+//   - probeProc now has the same 30s watchdog shape as the two pollers
+//     (S5b Finding 1 -- previously a hung `gh api user` inside the auth
+//     probe permanently stuck the service at "loading" with no recovery).
+//   - Per-source health is now tracked internally (probe/dashboard/
+//     notifications), each with its own status/lastSync/rate-limit state.
+//     The public `status`/`lastSyncMs`/`rateLimitedUntil` properties are
+//     *derived* (worst-of / max / whichever source is rate-limited) rather
+//     than being written directly by whichever poller happened to finish
+//     last (S5b Finding 2 -- this used to cause status flapping/masking
+//     between the two independently-cadenced pollers).
+//   - dashboardTimer/notificationsTimer's `interval` is assigned
+//     imperatively at arm time (component completion, each time the timer
+//     starts running, and at the top of each onTriggered), never bound
+//     live to the settings properties (S5b Finding 3 -- a live-bound
+//     interval silently discarded the in-progress countdown on any
+//     settings edit).
+//   - A partial GraphQL envelope (usable `data` for some sections
+//     alongside `errors` for others) now keeps whichever sections parsed
+//     instead of discarding the whole fetch (S5b Finding 4) -- see
+//     Model.mapDashboard's per-section null contract.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -45,13 +68,18 @@ Item {
   property var manifest: null
 
   // ============================================================
-  // Service public API -- exchange/06-design.md, frozen contract.
+  // Service public API -- exchange/06-design.md, frozen contract. Every
+  // property here is DERIVED from the per-source state in `internal` below
+  // -- none of them are assigned directly (see "Status state machine").
   // ============================================================
 
   // "ok" | "loading" | "no-gh" | "unauthenticated" | "offline" | "rate-limited"
-  readonly property string status: internal.status
-  readonly property double lastSyncMs: internal.lastSyncMs        // 0 until first success
-  readonly property string rateLimitedUntil: internal.rateLimitedUntil  // "" or "HH:MM"
+  readonly property string status: computeStatus()
+  // Bumped by ANY source's success, including a notifications 304 --
+  // 06-design.md's contract is "last time we successfully synced with
+  // GitHub", not "last time a specific poller succeeded".
+  readonly property double lastSyncMs: Math.max(internal.dashboardLastSyncMs, internal.notifLastSyncMs)
+  readonly property string rateLimitedUntil: pickRateLimitedUntil()
   readonly property bool busy: dashboardProc.running || notificationsProc.running
 
   readonly property var notifications: internal.notifications
@@ -110,6 +138,10 @@ Item {
   // config reload) re-evaluates every property below automatically. This
   // is the same "just bind, don't subscribe" pattern Ristretto's
   // Service.qml uses for sleepSeconds/dryRun (Service.qml:31-34).
+  //
+  // NOTE: this is the settings *value* itself, which is fine to keep live
+  // -- what must NOT be a live binding is a Timer.interval built from it
+  // (see dashboardTimer/notificationsTimer below, S5b Finding 3).
   // ============================================================
 
   readonly property var _shellConfig: shell ? shell.shellConfig : null
@@ -201,14 +233,29 @@ Item {
   // Internal state -- everything the public API above is derived from.
   // Kept in one QtObject so it reads unambiguously as "not part of the
   // contract" next to the readonly properties above.
+  //
+  // Per-source tracking (S5b Finding 2): the auth probe, the dashboard
+  // poller, and the notifications poller each own their own status/sync/
+  // rate-limit state. Nothing here is touched by more than one of
+  // handleProbeResult/handleDashboardExit/handleNotificationsExit (plus
+  // their matching watchdogs).
   // ============================================================
 
   QtObject {
     id: internal
-    property string status: "loading"
-    property double lastSyncMs: 0
-    property string rateLimitedUntil: ""
-    property double rateLimitedUntilMs: 0
+    property string probeStatus: "loading"
+    property string dashboardStatus: "loading"
+    property string notifStatus: "loading"
+
+    property double dashboardLastSyncMs: 0
+    property double notifLastSyncMs: 0
+
+    property double dashboardRateLimitedUntilMs: 0
+    property string dashboardRateLimitedUntil: ""
+    property double notifRateLimitedUntilMs: 0
+    property string notifRateLimitedUntil: ""
+    property double probeRateLimitedUntilMs: 0
+    property string probeRateLimitedUntil: ""
 
     property var notifications: []
     property var reviewRequests: []
@@ -217,21 +264,28 @@ Item {
 
     property string notificationsEtag: ""
 
-    // Gate on the two pollers below. False at startup and while status is
-    // no-gh/unauthenticated (06-design.md: "Slow re-probe (5 min) in the
-    // first two states; no fast retry loops" / "normal pollers stopped").
-    // True for every other state, including offline/rate-limited: those
-    // two keep polling on the normal cadence (offline) or on the normal
-    // cadence but skipping the fetch until rateLimitedUntilMs passes
-    // (rate-limited) -- see triggerDashboardFetch/triggerNotificationsFetch.
+    // Gate on the two pollers below. False at startup and while the
+    // service does not yet have a *resolved* auth signal, or has lost one
+    // mid-session (06-design.md: "Slow re-probe (5 min) in the first two
+    // states; no fast retry loops" / "normal pollers stopped"). Once true,
+    // stays true unless the OVERALL derived status becomes no-gh/
+    // unauthenticated again (see the root Item's onStatusChanged below) --
+    // offline/rate-limited never touch this flag, matching the original
+    // ladder ("keep polling on the normal cadence" for both).
     property bool pollersActive: false
+
+    // Tracks the last value `status` was logged at, so the onStatusChanged
+    // handler below can log "X -> Y" without needing the change signal to
+    // carry the previous value itself.
+    property string lastLoggedStatus: "loading"
 
     // Set true by a watchdog immediately before it force-stops a hung
     // Process; the resulting onExited is then a kill artifact, not a real
     // response, so the exit handler skips re-processing it (the watchdog
-    // itself already called handleFetchFailure once, synchronously).
+    // itself already called the failure handler once, synchronously).
     property bool dashWatchdogFired: false
     property bool notifWatchdogFired: false
+    property bool probeWatchdogFired: false
   }
 
   // ============================================================
@@ -242,22 +296,74 @@ Item {
     console.log("qml: github-status " + message)
   }
 
-  function setStatus(newStatus) {
-    if (internal.status === newStatus) return
-    log("status: " + internal.status + " -> " + newStatus)
-    internal.status = newStatus
-    if (newStatus === "no-gh" || newStatus === "unauthenticated") {
+  // Severity ladder, most severe first (exchange/12-s5b-correctness-
+  // review.md F2's exact ordering). worstOf picks whichever of the two
+  // inputs is more severe (lower index); an unrecognized string is treated
+  // as "loading" (a status this file never actually assigns is not worth
+  // crashing over).
+  function worstOf(a, b) {
+    var order = ["no-gh", "unauthenticated", "rate-limited", "offline", "loading", "ok"]
+    var ai = order.indexOf(a); if (ai < 0) ai = order.indexOf("loading")
+    var bi = order.indexOf(b); if (bi < 0) bi = order.indexOf("loading")
+    return ai <= bi ? a : b
+  }
+
+  // The public `status` is the worst-of across whichever sources currently
+  // matter. Deliberately excludes probeStatus once the pollers are engaged
+  // (internal.pollersActive === true): the probe's only job is the initial
+  // "is gh even usable" gate, run once (plus on every re-probe while
+  // blocked). Without this exclusion, a single probe result classified as
+  // e.g. "offline" (the F1 watchdog fix, when `gh api user` hangs) would
+  // permanently drag the overall status down even after both real pollers
+  // go on to succeed -- see exchange/14-s6-fixes.md for the reasoning.
+  // Once pollers are active, the real, continuously-refreshed signal is
+  // whatever the dashboard/notifications pollers themselves report, which
+  // will independently re-discover no-gh/unauthenticated/rate-limited/
+  // offline for real if any of those conditions actually recur.
+  function computeStatus() {
+    if (!internal.pollersActive) {
+      return worstOf(worstOf(internal.probeStatus, internal.dashboardStatus), internal.notifStatus)
+    }
+    return worstOf(internal.dashboardStatus, internal.notifStatus)
+  }
+
+  // rateLimitedUntil only ever reflects a source that is CURRENTLY
+  // rate-limited (never a stale value left over from a source that has
+  // since recovered) -- if more than one source happens to be rate-limited
+  // at once, show whichever resets soonest.
+  function pickRateLimitedUntil() {
+    var candidates = []
+    if (internal.dashboardStatus === "rate-limited") {
+      candidates.push({ until: internal.dashboardRateLimitedUntil, ms: internal.dashboardRateLimitedUntilMs })
+    }
+    if (internal.notifStatus === "rate-limited") {
+      candidates.push({ until: internal.notifRateLimitedUntil, ms: internal.notifRateLimitedUntilMs })
+    }
+    if (!internal.pollersActive && internal.probeStatus === "rate-limited") {
+      candidates.push({ until: internal.probeRateLimitedUntil, ms: internal.probeRateLimitedUntilMs })
+    }
+    if (candidates.length === 0) return ""
+    candidates.sort(function (a, b) { return a.ms - b.ms })
+    return candidates[0].until
+  }
+
+  // The one place the derived `status` is observed and acted on: logs
+  // every real transition, and stops both pollers + arms the re-probe
+  // cycle whenever the WORST current source is no-gh/unauthenticated --
+  // whether that came from the initial probe or from a poller discovering
+  // it mid-session (e.g. a token revoked while already running).
+  onStatusChanged: {
+    log("status: " + internal.lastLoggedStatus + " -> " + status)
+    internal.lastLoggedStatus = status
+    if (status === "no-gh" || status === "unauthenticated") {
       internal.pollersActive = false
       reProbeTimer.restart()
     }
   }
 
-  function onFetchSuccess() {
-    internal.lastSyncMs = Date.now()
-    internal.rateLimitedUntil = ""
-    internal.rateLimitedUntilMs = 0
-    setStatus("ok")
-  }
+  function setProbeStatus(s) { internal.probeStatus = s }
+  function setDashboardStatus(s) { internal.dashboardStatus = s }
+  function setNotifStatus(s) { internal.notifStatus = s }
 
   // cls is one of Model.classifyFailure's tags: "no-gh" | "http-304" |
   // "unauthenticated" | "rate-limited" | "offline" | "error". "http-304"
@@ -280,16 +386,54 @@ Item {
     }
   }
 
-  function handleFetchFailure(cls, rawText) {
+  // source is "probe" | "dashboard" | "notifications". Records the
+  // rate-limit reset time (if this classifies as rate-limited) against
+  // ONLY that source, then updates that source's own status -- a
+  // rate-limited dashboard poller never touches the notifications poller's
+  // state or vice versa (S5b Finding 2's "pause only the affected poller").
+  function handleFetchFailure(source, cls, rawText) {
     var mapped = mapClassifiedStatus(cls)
     if (mapped === "rate-limited") {
       var untilMs = parseRateLimitReset(rawText)
       if (!untilMs) untilMs = Date.now() + 60 * 60 * 1000  // fallback: +60min
-      internal.rateLimitedUntilMs = untilMs
-      internal.rateLimitedUntil = formatHHMM(untilMs)
-      log("rate-limited, resuming at " + internal.rateLimitedUntil)
+      var label = formatHHMM(untilMs)
+      if (source === "dashboard") {
+        internal.dashboardRateLimitedUntilMs = untilMs
+        internal.dashboardRateLimitedUntil = label
+      } else if (source === "notifications") {
+        internal.notifRateLimitedUntilMs = untilMs
+        internal.notifRateLimitedUntil = label
+      } else if (source === "probe") {
+        internal.probeRateLimitedUntilMs = untilMs
+        internal.probeRateLimitedUntil = label
+      }
+      log(source + " rate-limited, resuming at " + label)
     }
-    setStatus(mapped)
+    if (source === "dashboard") setDashboardStatus(mapped)
+    else if (source === "notifications") setNotifStatus(mapped)
+    else if (source === "probe") setProbeStatus(mapped)
+  }
+
+  // source is "probe" | "dashboard" | "notifications". Clears that
+  // source's own rate-limit state and bumps its own lastSyncMs (probe has
+  // no lastSyncMs of its own -- it isn't a data sync).
+  function onFetchSuccess(source) {
+    var now = Date.now()
+    if (source === "dashboard") {
+      internal.dashboardLastSyncMs = now
+      internal.dashboardRateLimitedUntil = ""
+      internal.dashboardRateLimitedUntilMs = 0
+      setDashboardStatus("ok")
+    } else if (source === "notifications") {
+      internal.notifLastSyncMs = now
+      internal.notifRateLimitedUntil = ""
+      internal.notifRateLimitedUntilMs = 0
+      setNotifStatus("ok")
+    } else if (source === "probe") {
+      internal.probeRateLimitedUntil = ""
+      internal.probeRateLimitedUntilMs = 0
+      setProbeStatus("ok")
+    }
   }
 
   // Best-effort extraction of GitHub's X-Ratelimit-Reset (unix epoch
@@ -314,25 +458,53 @@ Item {
     return pad2(d.getHours()) + ":" + pad2(d.getMinutes())
   }
 
+  // Truncates a JSON value to a short, log-safe preview -- used only for
+  // GraphQL's own `errors` array (server-authored error text about the
+  // query itself, not attacker-controlled remote content), capped
+  // defensively so a pathological error payload can't bloat the log.
+  function briefJson(v) {
+    try { return JSON.stringify(v).slice(0, 500) } catch (e) { return String(v).slice(0, 500) }
+  }
+
   // ============================================================
   // Auth probe (scripts/probe-auth): run once at startup, and again every
-  // 5 minutes while status is no-gh/unauthenticated (06-design.md
-  // degradation ladder). Exit codes are the stable contract documented in
-  // scripts/probe-auth's own header (0 ok / 3 no-gh / 4 unauthenticated /
-  // 5 other -- classify further via Model.classifyFailure).
+  // 5 minutes while the derived status is no-gh/unauthenticated
+  // (06-design.md degradation ladder). Exit codes are the stable contract
+  // documented in scripts/probe-auth's own header (0 ok / 3 no-gh /
+  // 4 unauthenticated / 5 other -- classify further via
+  // Model.classifyFailure).
+  //
+  // probeWatchdog (S5b Finding 1): a hung `gh api user` used to leave
+  // probeProc.running permanently true, making startProbe()'s own
+  // re-entrancy guard silently no-op every future re-probe (including
+  // reProbeTimer's every-5-minute attempts) forever -- the plugin never
+  // recovered without a manual shell/plugin restart. This mirrors
+  // dashWatchdog/notifWatchdog exactly: force-stop after 30s and treat it
+  // as a real (if inconclusive) result, never a wedge. Classified as
+  // "offline", not "no-gh" -- a hang is network-shaped (DNS/TCP not
+  // resolving/connecting), not "the binary is missing", and "offline"
+  // does not block polling, so the pollers get a chance to try for
+  // themselves as soon as the watchdog fires.
   // ============================================================
 
   function startProbe() {
     if (probeProc.running) return
+    probeWatchdog.restart()
     probeProc.running = true
   }
 
   Process {
     id: probeProc
     command: ["bash", "-lc", 'exec "$0"', root.pluginDir + "/scripts/probe-auth"]
+    // StdioCollector has no byte ceiling (Quickshell doesn't expose one) --
+    // accepted risk (exchange/11-s5a-security-review.md F5): bounded in
+    // practice by `gh api user`'s own tiny response shape and this file's
+    // 30s watchdog, not by an explicit size limit here.
     stdout: StdioCollector { id: probeOut; waitForEnd: true }
     stderr: StdioCollector { id: probeErr; waitForEnd: true }
     onExited: function (exitCode, exitStatus) {
+      probeWatchdog.stop()
+      if (internal.probeWatchdogFired) { internal.probeWatchdogFired = false; return }
       root.handleProbeResult(exitCode, probeErr.text)
     }
   }
@@ -340,20 +512,20 @@ Item {
   function handleProbeResult(exitCode, stderrText) {
     if (exitCode === 0) {
       log("probe-auth: authenticated")
-      if (internal.status === "no-gh" || internal.status === "unauthenticated") {
-        internal.status = "loading"
-      }
+      onFetchSuccess("probe")
       internal.pollersActive = true
       return
     }
-    if (exitCode === 3) { setStatus("no-gh"); return }
-    if (exitCode === 4) { setStatus("unauthenticated"); return }
+    if (exitCode === 3) { setProbeStatus("no-gh"); reProbeTimer.restart(); return }
+    if (exitCode === 4) { setProbeStatus("unauthenticated"); reProbeTimer.restart(); return }
     // exit 5: probe-auth's own coarse "some other failure" bucket --
     // classify precisely from stderr, but this alone must never block
     // polling (only a confirmed no-gh/unauthenticated does that).
     var cls = Model.classifyFailure(stderrText, exitCode)
-    handleFetchFailure(cls, stderrText)
-    if (internal.status !== "no-gh" && internal.status !== "unauthenticated") {
+    handleFetchFailure("probe", cls, stderrText)
+    if (internal.probeStatus === "no-gh" || internal.probeStatus === "unauthenticated") {
+      reProbeTimer.restart()
+    } else {
       internal.pollersActive = true
     }
   }
@@ -365,27 +537,55 @@ Item {
     onTriggered: root.startProbe()
   }
 
+  Timer {
+    id: probeWatchdog
+    interval: 30000
+    repeat: false
+    onTriggered: {
+      if (probeProc.running) {
+        root.log("auth probe watchdog: exceeded 30s, killing")
+        internal.probeWatchdogFired = true
+        probeProc.running = false
+        root.handleFetchFailure("probe", "offline", "watchdog: auth probe exceeded 30s")
+        // Never block polling on an inconclusive/timed-out probe alone --
+        // let the real pollers discover the true state for themselves.
+        internal.pollersActive = true
+      }
+    }
+  }
+
   // ============================================================
   // Dashboard fetch (scripts/fetch-dashboard -- combined GraphQL query):
   // openPRs + reviewRequests + repos in one call. Never blanks the UI on
   // failure -- internal.openPRs/reviewRequests/repos are only ever
-  // reassigned on a successful parse (03-shell-api.md §6 "keep stale data
-  // visible on failure").
+  // reassigned when Model.mapDashboard says that specific section actually
+  // parsed (03-shell-api.md §6 "keep stale data visible on failure";
+  // exchange/12-s5b-correctness-review.md Finding 4 for the per-section
+  // partial-success case).
   // ============================================================
 
   Timer {
     id: dashboardTimer
-    interval: Math.max(60, root.dashboardIntervalSec) * 1000
+    // Placeholder only -- reassigned imperatively at arm time below (S5b
+    // Finding 3: a live binding here silently discards the in-progress
+    // countdown on any settings edit). A settings change takes effect at
+    // the next natural cycle boundary (onTriggered) or the next time this
+    // timer starts running (onRunningChanged), never mid-countdown.
+    interval: 180000
     running: internal.pollersActive
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.triggerDashboardFetch()
+    onRunningChanged: if (running) interval = Math.max(60, root.dashboardIntervalSec) * 1000
+    onTriggered: {
+      interval = Math.max(60, root.dashboardIntervalSec) * 1000
+      root.triggerDashboardFetch()
+    }
   }
 
   function triggerDashboardFetch() {
     if (dashboardProc.running) return
-    if (internal.status === "no-gh" || internal.status === "unauthenticated") return
-    if (internal.status === "rate-limited" && Date.now() < internal.rateLimitedUntilMs) return
+    if (root.status === "no-gh" || root.status === "unauthenticated") return
+    if (internal.dashboardStatus === "rate-limited" && Date.now() < internal.dashboardRateLimitedUntilMs) return
     dashWatchdog.restart()
     dashboardProc.running = true
   }
@@ -396,6 +596,11 @@ Item {
     // which is resolved from this component's own file:// URL, never from
     // remote/user input.
     command: ["bash", "-lc", 'exec "$0"', root.pluginDir + "/scripts/fetch-dashboard"]
+    // StdioCollector has no byte ceiling (Quickshell doesn't expose one) --
+    // accepted risk (exchange/11-s5a-security-review.md F5): bounded in
+    // practice by the GraphQL query's own first:20/first:20/first:10 caps,
+    // gh-side timeouts, and this file's 30s watchdog, not by an explicit
+    // size limit here.
     stdout: StdioCollector { id: dashOut; waitForEnd: true }
     stderr: StdioCollector { id: dashErr; waitForEnd: true }
     onExited: function (exitCode, exitStatus) {
@@ -409,20 +614,26 @@ Item {
     if (exitCode === 0) {
       var parsed = null
       try { parsed = JSON.parse(rawOut) } catch (e) { parsed = null }
-      if (parsed && !parsed.errors) {
-        var mapped = Model.mapDashboard(parsed)
-        internal.openPRs = mapped.openPRs
-        internal.reviewRequests = mapped.reviewRequests
-        internal.repos = mapped.repos
-        onFetchSuccess()
+      var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null }
+      var gotSomething = mapped.openPRs !== null || mapped.reviewRequests !== null || mapped.repos !== null
+      if (gotSomething) {
+        if (mapped.openPRs !== null) internal.openPRs = mapped.openPRs
+        if (mapped.reviewRequests !== null) internal.reviewRequests = mapped.reviewRequests
+        if (mapped.repos !== null) internal.repos = mapped.repos
+        if (parsed && parsed.errors) {
+          log("dashboard fetch: partial GraphQL errors -- kept the section(s) that parsed, "
+            + "discarded the rest: " + briefJson(parsed.errors))
+        }
+        onFetchSuccess("dashboard")
       } else {
-        log("dashboard fetch: malformed/errors JSON envelope -- keeping last-good data")
-        handleFetchFailure("error", rawErr || (parsed ? JSON.stringify(parsed.errors) : "unparseable JSON"))
+        log("dashboard fetch: no usable data in JSON envelope -- keeping last-good data")
+        handleFetchFailure("dashboard", "error",
+          rawErr || (parsed && parsed.errors ? briefJson(parsed.errors) : "unparseable/empty JSON"))
       }
       return
     }
     var cls = Model.classifyFailure(rawErr, exitCode)
-    handleFetchFailure(cls, rawErr)
+    handleFetchFailure("dashboard", cls, rawErr)
   }
 
   Timer {
@@ -434,7 +645,7 @@ Item {
         root.log("dashboard fetch watchdog: exceeded 30s, killing")
         internal.dashWatchdogFired = true
         dashboardProc.running = false
-        root.handleFetchFailure("offline", "watchdog: dashboard fetch exceeded 30s")
+        root.handleFetchFailure("dashboard", "offline", "watchdog: dashboard fetch exceeded 30s")
       }
     }
   }
@@ -450,17 +661,23 @@ Item {
 
   Timer {
     id: notificationsTimer
-    interval: Math.max(60, root.notificationsIntervalSec) * 1000
+    // Placeholder only -- see dashboardTimer's comment above (S5b
+    // Finding 3); same assign-at-arm pattern.
+    interval: 60000
     running: internal.pollersActive
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.triggerNotificationsFetch()
+    onRunningChanged: if (running) interval = Math.max(60, root.notificationsIntervalSec) * 1000
+    onTriggered: {
+      interval = Math.max(60, root.notificationsIntervalSec) * 1000
+      root.triggerNotificationsFetch()
+    }
   }
 
   function triggerNotificationsFetch() {
     if (notificationsProc.running) return
-    if (internal.status === "no-gh" || internal.status === "unauthenticated") return
-    if (internal.status === "rate-limited" && Date.now() < internal.rateLimitedUntilMs) return
+    if (root.status === "no-gh" || root.status === "unauthenticated") return
+    if (internal.notifStatus === "rate-limited" && Date.now() < internal.notifRateLimitedUntilMs) return
     // The ETag is the one remote-derived value in this whole service. It
     // is passed as its own argv element ($1), never interpolated into the
     // -lc string -- see the header comment and exchange/08-s2-service.md
@@ -475,6 +692,11 @@ Item {
 
   Process {
     id: notificationsProc
+    // StdioCollector has no byte ceiling (Quickshell doesn't expose one) --
+    // accepted risk (exchange/11-s5a-security-review.md F5): bounded in
+    // practice by fetch-notifications never passing --paginate (one
+    // default-sized REST page only), gh-side timeouts, and this file's 30s
+    // watchdog, not by an explicit size limit here.
     stdout: StdioCollector { id: notifOut; waitForEnd: true }
     stderr: StdioCollector { id: notifErr; waitForEnd: true }
     onExited: function (exitCode, exitStatus) {
@@ -491,7 +713,7 @@ Item {
       if (parsed.body !== null) {
         internal.notifications = Model.mapNotifications(parsed.body)
       }
-      onFetchSuccess()
+      onFetchSuccess("notifications")
       return
     }
     var cls = Model.classifyFailure(rawErr, exitCode)
@@ -503,10 +725,10 @@ Item {
       var parsed304 = Model.parseHeadersAndBody(rawOut)
       if (parsed304.etag) internal.notificationsEtag = parsed304.etag
       log("notifications: no change (304)")
-      onFetchSuccess()
+      onFetchSuccess("notifications")
       return
     }
-    handleFetchFailure(cls, rawOut + "\n" + rawErr)
+    handleFetchFailure("notifications", cls, rawOut + "\n" + rawErr)
   }
 
   Timer {
@@ -518,7 +740,7 @@ Item {
         root.log("notifications fetch watchdog: exceeded 30s, killing")
         internal.notifWatchdogFired = true
         notificationsProc.running = false
-        root.handleFetchFailure("offline", "watchdog: notifications fetch exceeded 30s")
+        root.handleFetchFailure("notifications", "offline", "watchdog: notifications fetch exceeded 30s")
       }
     }
   }
