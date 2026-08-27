@@ -27,6 +27,7 @@ var CAP_NOTIFICATIONS = 50
 var CAP_PRS = 20
 var CAP_REVIEW_REQUESTS = 20
 var CAP_REPOS = 30
+var CAP_MY_ISSUES = 20  // exchange/19-feedback-delta-spec.md F3 -- same cap shape as reviewRequests
 
 // Per-field string-length caps (exchange/11-s5a-security-review.md F2): list
 // LENGTH is already capped above; this bounds individual field length too,
@@ -70,6 +71,30 @@ function safeNum(v, fallback) {
 function truncate(v, maxLen, fallback) {
   var s = safeStr(v, fallback)
   return s.length > maxLen ? s.slice(0, maxLen) : s
+}
+
+// ------------------------------------------------------------- own vs external (F6)
+
+// "owner/repo" (GraphQL nameWithOwner, or REST full_name -- same shape) ->
+// just the owner segment. "" on anything that doesn't contain a "/" with
+// content before it (missing/malformed repo identifier).
+function ownerFromNameWithOwner(nameWithOwner) {
+  var s = safeStr(nameWithOwner, "")
+  var idx = s.indexOf("/")
+  return idx > 0 ? s.slice(0, idx) : ""
+}
+
+// exchange/19-feedback-delta-spec.md F6: a row is "external" when its repo's
+// owner segment differs from the viewer's own login, compared
+// case-insensitively (GitHub logins/org names are case-insensitive; "Foo"
+// and "foo" are the same account). Defensively conservative when either side
+// is missing/unknown: an owner or login we can't determine is never flagged
+// external (no pill is safer than a wrong pill from a false positive).
+function isExternalOwner(owner, login) {
+  var o = safeStr(owner, "")
+  var l = safeStr(login, "")
+  if (!o || !l) return false
+  return o.toLowerCase() !== l.toLowerCase()
 }
 
 // ----------------------------------------------------- URL translation
@@ -128,7 +153,15 @@ function apiUrlToWebUrl(subject) {
 // Raw shape: array of { id, unread, reason, subject: {title, url, type},
 // repository: {full_name, html_url}, updated_at }. See
 // exchange/samples/notifications.json.
-function mapNotifications(json) {
+//
+// `login` (exchange/19-feedback-delta-spec.md F6): the REST notifications
+// API has no `viewer`-shaped field to read the account's own login from --
+// unlike mapDashboard's GraphQL envelope, which carries `viewer.login`
+// alongside the data it maps -- so the caller (Service.qml) passes in the
+// login it separately learned from scripts/probe-auth's stdout. Optional:
+// omitting it (or passing anything falsy) makes every item non-external
+// (isExternalOwner's conservative default), never a thrown error.
+function mapNotifications(json, login) {
   if (!isArray(json)) return []
   var out = []
   for (var i = 0; i < json.length && out.length < CAP_NOTIFICATIONS; i++) {
@@ -137,6 +170,7 @@ function mapNotifications(json) {
     var subject = isObject(n.subject) ? n.subject : {}
     var repository = isObject(n.repository) ? n.repository : {}
     var repo = truncate(repository.full_name, FIELD_CAP_TAG)
+    var owner = ownerFromNameWithOwner(repo)
     var webUrl = apiUrlToWebUrl(subject)
     if (!webUrl) webUrl = truncate(repository.html_url, FIELD_CAP_URL)
     out.push({
@@ -146,7 +180,9 @@ function mapNotifications(json) {
       title: truncate(subject.title, FIELD_CAP_TEXT),
       repo: repo,
       webUrl: truncate(webUrl, FIELD_CAP_URL),
-      updatedAt: truncate(n.updated_at, FIELD_CAP_TAG)
+      updatedAt: truncate(n.updated_at, FIELD_CAP_TAG),
+      isExternal: isExternalOwner(owner, login),
+      owner: owner
     })
   }
   return out
@@ -173,13 +209,14 @@ function ciRollupToState(rollup) {
 
 // ------------------------------------------------------------------ dashboard
 
-function mapOpenPRs(nodes) {
+function mapOpenPRs(login, nodes) {
   var arr = isArray(nodes) ? nodes : []
   var openPRs = []
   for (var i = 0; i < arr.length && openPRs.length < CAP_PRS; i++) {
     var pr = arr[i]
     if (!isObject(pr)) continue
     var prRepo = isObject(pr.repository) ? truncate(pr.repository.nameWithOwner, FIELD_CAP_TAG) : ""
+    var prOwner = ownerFromNameWithOwner(prRepo)
     var rollup = null
     if (isObject(pr.commits) && isArray(pr.commits.nodes) && pr.commits.nodes.length > 0) {
       var lastCommitNode = pr.commits.nodes[pr.commits.nodes.length - 1]
@@ -195,28 +232,57 @@ function mapOpenPRs(nodes) {
       updatedAt: truncate(pr.updatedAt, FIELD_CAP_TAG),
       isDraft: pr.isDraft === true,
       ciState: ciRollupToState(rollup),
-      reviewDecision: truncate(isString(pr.reviewDecision) ? pr.reviewDecision : "", FIELD_CAP_TAG)
+      reviewDecision: truncate(isString(pr.reviewDecision) ? pr.reviewDecision : "", FIELD_CAP_TAG),
+      isExternal: isExternalOwner(prOwner, login),
+      owner: prOwner
     })
   }
   return openPRs
 }
 
-function mapReviewRequests(nodes) {
+function mapReviewRequests(login, nodes) {
   var arr = isArray(nodes) ? nodes : []
   var reviewRequests = []
   for (var j = 0; j < arr.length && reviewRequests.length < CAP_REVIEW_REQUESTS; j++) {
     var rr = arr[j]
     if (!isObject(rr)) continue
     var rrRepo = isObject(rr.repository) ? truncate(rr.repository.nameWithOwner, FIELD_CAP_TAG) : ""
+    var rrOwner = ownerFromNameWithOwner(rrRepo)
     reviewRequests.push({
       title: truncate(rr.title, FIELD_CAP_TEXT),
       repo: rrRepo,
       number: safeNum(rr.number, 0),
       webUrl: truncate(rr.url, FIELD_CAP_URL),
-      updatedAt: truncate(rr.updatedAt, FIELD_CAP_TAG)
+      updatedAt: truncate(rr.updatedAt, FIELD_CAP_TAG),
+      isExternal: isExternalOwner(rrOwner, login),
+      owner: rrOwner
     })
   }
   return reviewRequests
+}
+
+// exchange/19-feedback-delta-spec.md F3: issues the viewer opened, any repo,
+// open state -- same shape/cap/truncation discipline as mapReviewRequests,
+// plus the F6 isExternal/owner marking every other row type gets.
+function mapMyIssues(login, nodes) {
+  var arr = isArray(nodes) ? nodes : []
+  var myIssues = []
+  for (var m = 0; m < arr.length && myIssues.length < CAP_MY_ISSUES; m++) {
+    var issue = arr[m]
+    if (!isObject(issue)) continue
+    var issueRepo = isObject(issue.repository) ? truncate(issue.repository.nameWithOwner, FIELD_CAP_TAG) : ""
+    var issueOwner = ownerFromNameWithOwner(issueRepo)
+    myIssues.push({
+      title: truncate(issue.title, FIELD_CAP_TEXT),
+      repo: issueRepo,
+      number: safeNum(issue.number, 0),
+      webUrl: truncate(issue.url, FIELD_CAP_URL),
+      updatedAt: truncate(issue.updatedAt, FIELD_CAP_TAG),
+      isExternal: isExternalOwner(issueOwner, login),
+      owner: issueOwner
+    })
+  }
+  return myIssues
 }
 
 function mapRepos(login, nodes) {
@@ -236,46 +302,100 @@ function mapRepos(login, nodes) {
       openPRs: isObject(r.openPRCount) ? safeNum(r.openPRCount.totalCount, 0) : 0,
       releaseTag: release ? truncate(release.tagName, FIELD_CAP_TAG) : "",
       releaseUrl: release ? truncate(release.url, FIELD_CAP_URL) : "",
-      lastCommitHeadline: branchTarget ? truncate(branchTarget.messageHeadline, FIELD_CAP_TEXT) : ""
+      lastCommitHeadline: branchTarget ? truncate(branchTarget.messageHeadline, FIELD_CAP_TEXT) : "",
+      // F1/F2 (exchange/19-feedback-delta-spec.md): stars is a bare int, no
+      // string cap needed (it can never grow the panel's memory/render cost
+      // the way a string field could -- it renders as at most a handful of
+      // digits regardless of magnitude); isArchived/isFork/isPrivate are
+      // already fetched by the query (unused, until now) and only ever
+      // GraphQL-typed booleans, so a strict `=== true` check is enough
+      // defense against a malformed/partial node.
+      stars: safeNum(r.stargazerCount, 0),
+      isArchived: r.isArchived === true,
+      isFork: r.isFork === true,
+      isPrivate: r.isPrivate === true
     })
   }
   return repos
 }
 
+// F2: one status pill per repo row, priority archived > fork > private (an
+// archived fork of a private-visibility... well, archived still wins if
+// several happen to be true at once -- "Public archive" is the state GitHub
+// itself foregrounds first on a repo's own page). "" means no pill.
+function repoPill(repo) {
+  if (!isObject(repo)) return ""
+  if (repo.isArchived === true) return "archived"
+  if (repo.isFork === true) return "fork"
+  if (repo.isPrivate === true) return "private"
+  return ""
+}
+
+// F1: client-side sort over the already-fetched repos window (first: 20 in
+// the query -- fine at this scale, see docs/developers.md). Returns a NEW
+// array (never mutates the input) so a caller holding the previous array as
+// "last-good" data is unaffected. Unrecognized/missing mode falls back to
+// "activity" (pushedAt desc) -- the default and the query's own natural
+// order. "stars" mode ties-break on pushedAt desc too, so two zero-star (or
+// equal-star) repos still land in a stable, sensible order rather than
+// whatever order Array.sort's comparator happens to leave them in.
+function sortRepos(repos, mode) {
+  var arr = isArray(repos) ? repos.slice() : []
+  var m = mode === "stars" ? "stars" : "activity"
+  function pushedAtMs(r) {
+    var t = isObject(r) ? Date.parse(safeStr(r.pushedAt, "")) : NaN
+    return isNaN(t) ? 0 : t
+  }
+  if (m === "stars") {
+    arr.sort(function (a, b) {
+      var diff = safeNum(b && b.stars, 0) - safeNum(a && a.stars, 0)
+      return diff !== 0 ? diff : pushedAtMs(b) - pushedAtMs(a)
+    })
+  } else {
+    arr.sort(function (a, b) { return pushedAtMs(b) - pushedAtMs(a) })
+  }
+  return arr
+}
+
 // Raw shape: the parsed body of the mega GraphQL query
 // (exchange/04-github-data.md #6 / exchange/samples/mega-graphql.json):
-// { data: { viewer: { openPRs: {nodes:[...]}, repositories: {nodes:[...]} },
-//           reviewRequests: { nodes: [...] } } }
+// { data: { viewer: { openPRs: {nodes:[...]}, repositories: {nodes:[...]},
+//           myIssues: {nodes:[...]} }, reviewRequests: { nodes: [...] } } }
 //
 // Per-section contract (exchange/12-s5b-correctness-review.md F4): GraphQL
 // allows a response to carry `data` for the fields that resolved AND
 // `errors` for the ones that didn't in the SAME envelope (GitHub's `search`
 // -- used for reviewRequests -- has its own stricter rate-limit bucket
 // separate from the object-graph API, so it's realistic for reviewRequests
-// to error out while openPRs/repositories succeed in the same call). Each
-// of the three returned sections is either a mapped array (the source field
-// was present as an object in `data`, however many/few nodes it had -- an
-// empty array is a legitimate "genuinely nothing here", not "unusable") or
-// `null`, which is the explicit "this section did not resolve -- caller
-// must NOT replace its last-good value" signal. A whole-envelope failure
-// (non-object `json`, missing/non-object `json.data`) returns all three as
-// null, which is the correct "nothing usable" case the caller treats as a
-// full fetch failure.
+// to error out while openPRs/repositories/myIssues succeed in the same
+// call). Each of the four returned sections is either a mapped array (the
+// source field was present as an object in `data`, however many/few nodes
+// it had -- an empty array is a legitimate "genuinely nothing here", not
+// "unusable") or `null`, which is the explicit "this section did not
+// resolve -- caller must NOT replace its last-good value" signal
+// (exchange/19-feedback-delta-spec.md extends this same contract to the new
+// myIssues section). A whole-envelope failure (non-object `json`,
+// missing/non-object `json.data`) returns all four as null, which is the
+// correct "nothing usable" case the caller treats as a full fetch failure.
 function mapDashboard(json) {
-  var result = { openPRs: null, reviewRequests: null, repos: null }
+  var result = { openPRs: null, reviewRequests: null, repos: null, myIssues: null }
   if (!isObject(json)) return result
   var data = isObject(json.data) ? json.data : null
   if (!data) return result
 
   var viewer = isObject(data.viewer) ? data.viewer : null
+  var login = viewer ? safeStr(viewer.login, "") : ""
   if (viewer && isObject(viewer.openPRs)) {
-    result.openPRs = mapOpenPRs(viewer.openPRs.nodes)
+    result.openPRs = mapOpenPRs(login, viewer.openPRs.nodes)
   }
   if (viewer && isObject(viewer.repositories)) {
-    result.repos = mapRepos(safeStr(viewer.login, ""), viewer.repositories.nodes)
+    result.repos = mapRepos(login, viewer.repositories.nodes)
+  }
+  if (viewer && isObject(viewer.myIssues)) {
+    result.myIssues = mapMyIssues(login, viewer.myIssues.nodes)
   }
   if (isObject(data.reviewRequests)) {
-    result.reviewRequests = mapReviewRequests(data.reviewRequests.nodes)
+    result.reviewRequests = mapReviewRequests(login, data.reviewRequests.nodes)
   }
   return result
 }
@@ -450,6 +570,33 @@ function summaryTooltip(state) {
   return parts.join(" · ")
 }
 
+// ------------------------------------------------------------- settings persistence
+
+// `shell.updateEntryInline(moduleName, settings)` (the first-party host
+// helper, /usr/share/omarchy/shell/shell.qml) REPLACES the whole plugin
+// settings entry with `{id}` plus exactly the keys `settings` hands it --
+// it does not merge onto whatever is already stored. A caller that passes
+// only the one key it wants to change silently drops every other setting
+// the entry held (the precedent this mirrors:
+// ~/.config/omarchy/plugins/halmylyseas.ristretto/Model.js's
+// `mergedSettings`, same trap, same fix). Always build the full next-state
+// object from `current` (the plugin's existing settings entry, or any
+// falsy value for "no entry yet") first, so a single-setting write like
+// `setRepoSort` can never clobber `dashboardIntervalSec`/`repoLimit`/etc.
+// The `id` key is stripped from `current` even if present -- the host adds
+// it back itself, keyed off the moduleName argument, not off anything in
+// this object.
+function mergedSettings(current, key, value) {
+  var next = {}
+  if (isObject(current)) {
+    for (var k in current) {
+      if (k !== "id") next[k] = current[k]
+    }
+  }
+  next[key] = value
+  return next
+}
+
 // ------------------------------------------------------------- module export
 
 if (typeof module !== "undefined" && module.exports) {
@@ -466,6 +613,11 @@ if (typeof module !== "undefined" && module.exports) {
     summaryTooltip: summaryTooltip,
     repoWebUrl: repoWebUrl,
     truncate: truncate,
+    repoPill: repoPill,
+    sortRepos: sortRepos,
+    ownerFromNameWithOwner: ownerFromNameWithOwner,
+    isExternalOwner: isExternalOwner,
+    mergedSettings: mergedSettings,
     FIELD_CAP_TEXT: FIELD_CAP_TEXT,
     FIELD_CAP_TAG: FIELD_CAP_TAG,
     FIELD_CAP_URL: FIELD_CAP_URL

@@ -7,10 +7,24 @@
 # GET-equivalent only: this is a GraphQL `query`, never a `mutation` -- see
 # CLAUDE.md hard rule #2 (the plugin never mutates GitHub state).
 #
-# The query text below is byte-identical to the one verified live against
-# the real API in exchange/04-github-data.md #6 (~2s wall time, ~1 graphql
-# point per call). Do not edit the query without re-verifying against a real
-# `gh api graphql` call and updating that doc.
+# The query text below was extended live 2026-08-27 for
+# exchange/19-feedback-delta-spec.md (F1/F2/F3): `stargazerCount` added to
+# `repositories.nodes` (F1/F2 -- repo sort by stars, repo status pills);
+# `myIssues` added as a viewer-scoped alias of `issues(states: OPEN, ...)`
+# (F3 -- issues the account itself opened, any repo). `myIssues`'s semantics
+# were live-verified against this account, not assumed: `viewer.issues`
+# (no `filterBy`) returned exactly this account's own authored open issues
+# across five different repos it does not all own -- including
+# `HANCORE-linux/omarchy-plugin-marketplace#2672`, the acceptance fixture --
+# every node's `author.login` matched `viewer.login` in that live probe (see
+# exchange/20-s8-data-delta.md for the trimmed evidence). Same shape/first:
+# window discipline as `openPRs` above: capped at `first: 20`,
+# `orderBy: UPDATED_AT DESC`, the exact same pattern already used for
+# `openPRs` (an authored, viewer-scoped connection). The remainder of the
+# query is byte-identical to the version originally verified live in
+# exchange/04-github-data.md #6 (~2s wall time, ~1 graphql point per call).
+# Do not edit the query without re-verifying against a real `gh api graphql`
+# call and updating that doc.
 #
 # NOTE (deviation from exchange/06-design.md's literal suggestion of
 # `-f query=@-`): `gh api`'s `@<path>`/`@-` file/stdin-reading syntax is only
@@ -43,10 +57,17 @@ query {
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
+    myIssues: issues(states: OPEN, first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        title url number updatedAt
+        repository { nameWithOwner }
+      }
+    }
     repositories(first: 20, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) {
       totalCount
       nodes {
-        name pushedAt isPrivate isArchived isFork
+        name pushedAt isPrivate isArchived isFork stargazerCount
         openIssues: issues(states: OPEN) { totalCount }
         openPRCount: pullRequests(states: OPEN) { totalCount }
         latestRelease { tagName name publishedAt url }

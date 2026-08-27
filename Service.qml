@@ -52,6 +52,22 @@
 //     alongside `errors` for others) now keeps whichever sections parsed
 //     instead of discarding the whole fetch (S5b Finding 4) -- see
 //     Model.mapDashboard's per-section null contract.
+//
+// S8 delta pass (exchange/19-feedback-delta-spec.md, on top of 06-design.md):
+//   - `myIssues` added as a public property, same replace-on-success/
+//     keep-last-good-on-failure lifecycle as `openPRs` (F3).
+//   - `repos` is now Model.sortRepos(internal.repos, repoSort) THEN sliced
+//     by repoLimit -- internal.repos itself stays in raw query order; the
+//     sort is applied at read time so a live repoSort change reorders
+//     immediately (F1). `repoSort` + `setRepoSort(mode)` are new public
+//     API: the setter persists through Model.mergedSettings (see its own
+//     header comment for the "updateEntryInline replaces the whole entry"
+//     trap this avoids), never a raw `{repoSort: mode}` write.
+//   - probe-auth's stdout (the authenticated login, not a secret) is now
+//     captured into `internal.login` and threaded into
+//     Model.mapNotifications so notification rows can derive `isExternal`/
+//     `owner` (F6) -- the REST notifications payload has no `viewer`-shaped
+//     field to read a login from itself.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -88,9 +104,18 @@ Item {
   }).length
   readonly property var reviewRequests: internal.reviewRequests
   readonly property var openPRs: internal.openPRs
-  // repoLimit (a setting, min 3/max 30) is applied here, on top of
-  // Model.js's own fixed CAP_REPOS=30 -- see "Settings" below.
-  readonly property var repos: internal.repos.slice(0, root.repoLimit)
+  // exchange/19-feedback-delta-spec.md F3: same lifecycle/state handling as
+  // openPRs -- per-source (well, per-dashboard-fetch) replace on success via
+  // Model.mapDashboard's null-vs-[] contract, keep-last-good on failure.
+  readonly property var myIssues: internal.myIssues
+  // F1: repos are sorted per `repoSort`, THEN sliced per repoLimit (a
+  // setting, min 3/max 30) -- single ownership of both the sort and the
+  // slice lives here, on top of Model.js's own fixed CAP_REPOS=30 -- see
+  // "Settings" below. internal.repos itself is always stored in the raw
+  // order the query/mapper produced it (activity order); re-sorting happens
+  // here, not at assignment time, so a live repoSort change re-orders
+  // immediately without needing a new fetch.
+  readonly property var repos: Model.sortRepos(internal.repos, root.repoSort).slice(0, root.repoLimit)
   readonly property bool hasAttention:
     internal.openPRs.some(function (p) { return p && p.ciState === "failure" })
     || internal.reviewRequests.length > 0
@@ -130,6 +155,31 @@ Item {
     Quickshell.execDetached(["xdg-open", url])
   }
 
+  // F1 (exchange/19-feedback-delta-spec.md): validates `mode` (anything
+  // other than exactly "stars" becomes "activity" -- same permissive-
+  // default-on-garbage-input shape as Model.sortRepos itself), then
+  // persists it via shell.updateEntryInline -- trap 10 (see
+  // Model.mergedSettings's own header comment): that host call REPLACES
+  // the whole settings entry with whatever keys it's handed, so this always
+  // builds the FULL next-state object (current settings entry + the one
+  // changed key) rather than a bare `{repoSort: mode}`, or every other
+  // persisted setting (dashboardIntervalSec, notificationsIntervalSec,
+  // repoLimit) would be silently dropped on the next repo-sort toggle.
+  // "Applies immediately": `root.repoSort` (below) is a live binding over
+  // `_settingsEntry`/`shellConfig`, so the moment updateEntryInline
+  // reassigns `shell.shellConfig`, `repoSort` (and therefore the sorted
+  // `repos` property above) re-evaluates on its own -- no separate internal
+  // state to keep in sync.
+  function setRepoSort(mode) {
+    var next = validRepoSort(mode)
+    if (!shell || typeof shell.updateEntryInline !== "function") {
+      log("setRepoSort: shell.updateEntryInline unavailable -- cannot persist")
+      return
+    }
+    shell.updateEntryInline("halmylyseas.github-status", Model.mergedSettings(root._settingsEntry, "repoSort", next))
+    log("repoSort set to " + next)
+  }
+
   // ============================================================
   // Settings: shell.json entry for this plugin, manifest defaults as
   // fallback. Plain readonly bindings off shell.shellConfig (itself a live
@@ -153,6 +203,13 @@ Item {
     clampInt(settingInt(_settingsEntry, "notificationsIntervalSec", manifestDefault("notificationsIntervalSec", 60)), 60, 600)
   readonly property int repoLimit:
     clampInt(settingInt(_settingsEntry, "repoLimit", manifestDefault("repoLimit", 10)), 3, 30)
+  // F1: "activity" (default) or "stars" -- validRepoSort() is the single
+  // point that decides what counts as a legal value, so a hand-edited (or
+  // stale, pre-1.1) shell.json entry with a garbage/missing repoSort value
+  // falls back to "activity" rather than producing an unsorted/broken repos
+  // list.
+  readonly property string repoSort:
+    validRepoSort(settingStr(_settingsEntry, "repoSort", manifestDefault("repoSort", "activity")))
 
   // shell.json's bar-layout entries can be a bare string ("halmylyseas.
   // github-status") instead of an object ({id: "..."}) -- that form
@@ -200,8 +257,19 @@ Item {
     return isNaN(n) ? fallback : n
   }
 
+  function settingStr(entry, key, fallback) {
+    if (!entry) return fallback
+    var v = entry[key]
+    if (v === undefined || v === null) return fallback
+    return String(v)
+  }
+
   function clampInt(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v))
+  }
+
+  function validRepoSort(mode) {
+    return mode === "stars" ? "stars" : "activity"
   }
 
   function manifestDefault(key, hardFallback) {
@@ -261,8 +329,19 @@ Item {
     property var reviewRequests: []
     property var openPRs: []
     property var repos: []
+    property var myIssues: []
 
     property string notificationsEtag: ""
+
+    // The authenticated account's own login, learned once from
+    // scripts/probe-auth's stdout on a successful probe (exchange/19-
+    // feedback-delta-spec.md F6). Not a secret -- GitHub usernames are
+    // public, same rationale probe-auth's own header comment gives for
+    // printing it at all. Threaded into Model.mapNotifications (the REST
+    // notifications payload has no `viewer`-shaped field to read a login
+    // from, unlike the GraphQL dashboard envelope, which carries its own
+    // `viewer.login` end to end through Model.mapDashboard already).
+    property string login: ""
 
     // Gate on the two pollers below. False at startup and while the
     // service does not yet have a *resolved* auth signal, or has lost one
@@ -505,13 +584,21 @@ Item {
     onExited: function (exitCode, exitStatus) {
       probeWatchdog.stop()
       if (internal.probeWatchdogFired) { internal.probeWatchdogFired = false; return }
-      root.handleProbeResult(exitCode, probeErr.text)
+      root.handleProbeResult(exitCode, probeOut.text, probeErr.text)
     }
   }
 
-  function handleProbeResult(exitCode, stderrText) {
+  function handleProbeResult(exitCode, stdoutText, stderrText) {
     if (exitCode === 0) {
-      log("probe-auth: authenticated")
+      // exchange/19-feedback-delta-spec.md F6: probe-auth prints the
+      // authenticated login (not a secret -- see its own header comment) on
+      // stdout on success. Trimmed defensively (a trailing newline is the
+      // only thing ever actually present) -- Model.mapNotifications treats
+      // a missing/empty login as "never external" rather than throwing, so
+      // a malformed capture here degrades gracefully, not fatally.
+      var login = String(stdoutText || "").replace(/^\s+|\s+$/g, "")
+      if (login) internal.login = login
+      log("probe-auth: authenticated" + (login ? " as " + login : ""))
       onFetchSuccess("probe")
       internal.pollersActive = true
       return
@@ -614,12 +701,13 @@ Item {
     if (exitCode === 0) {
       var parsed = null
       try { parsed = JSON.parse(rawOut) } catch (e) { parsed = null }
-      var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null }
-      var gotSomething = mapped.openPRs !== null || mapped.reviewRequests !== null || mapped.repos !== null
+      var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null, myIssues: null }
+      var gotSomething = mapped.openPRs !== null || mapped.reviewRequests !== null || mapped.repos !== null || mapped.myIssues !== null
       if (gotSomething) {
         if (mapped.openPRs !== null) internal.openPRs = mapped.openPRs
         if (mapped.reviewRequests !== null) internal.reviewRequests = mapped.reviewRequests
         if (mapped.repos !== null) internal.repos = mapped.repos
+        if (mapped.myIssues !== null) internal.myIssues = mapped.myIssues
         if (parsed && parsed.errors) {
           log("dashboard fetch: partial GraphQL errors -- kept the section(s) that parsed, "
             + "discarded the rest: " + briefJson(parsed.errors))
@@ -711,7 +799,7 @@ Item {
       var parsed = Model.parseHeadersAndBody(rawOut)
       if (parsed.etag) internal.notificationsEtag = parsed.etag
       if (parsed.body !== null) {
-        internal.notifications = Model.mapNotifications(parsed.body)
+        internal.notifications = Model.mapNotifications(parsed.body, internal.login)
       }
       onFetchSuccess("notifications")
       return
@@ -750,7 +838,8 @@ Item {
     log("service ready (pluginDir=" + root.pluginDir
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
       + " notificationsIntervalSec=" + root.notificationsIntervalSec
-      + " repoLimit=" + root.repoLimit + ")")
+      + " repoLimit=" + root.repoLimit
+      + " repoSort=" + root.repoSort + ")")
     startProbe()
   }
 }
