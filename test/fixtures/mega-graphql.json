@@ -9,7 +9,7 @@
             "title": "Add Nujabes theme",
             "url": "https://github.com/omacom-io/omarchy-site/pull/77",
             "number": 77,
-            "updatedAt": "2026-08-26T17:45:36Z",
+            "updatedAt": "2026-08-27T11:43:56Z",
             "isDraft": false,
             "reviewDecision": null,
             "repository": {
@@ -27,37 +27,66 @@
           }
         ]
       },
+      "myIssues": {
+        "totalCount": 5,
+        "nodes": [
+          {
+            "title": "[Plugin]: Ristretto",
+            "url": "https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2672",
+            "number": 2672,
+            "updatedAt": "2026-08-27T05:36:20Z",
+            "repository": {
+              "nameWithOwner": "HANCORE-linux/omarchy-plugin-marketplace"
+            }
+          },
+          {
+            "title": "[Theme] Nujabes",
+            "url": "https://github.com/limehawk/omarchy-theme-website/issues/117",
+            "number": 117,
+            "updatedAt": "2026-08-26T16:46:16Z",
+            "repository": {
+              "nameWithOwner": "limehawk/omarchy-theme-website"
+            }
+          },
+          {
+            "title": "[BUG] Safety classifier false positive: Cyrillic transliteration table in game-decompilation work triggers model auto-switch (Fable 5 \u2192 Opus)",
+            "url": "https://github.com/anthropics/claude-code/issues/84820",
+            "number": 84820,
+            "updatedAt": "2026-08-24T22:09:11Z",
+            "repository": {
+              "nameWithOwner": "anthropics/claude-code"
+            }
+          },
+          {
+            "title": "Vandal Hearts (PSX) - Decomp and PC Port",
+            "url": "https://github.com/Sebastrion/awesome-unofficial-pc-ports/issues/11",
+            "number": 11,
+            "updatedAt": "2026-08-09T17:59:00Z",
+            "repository": {
+              "nameWithOwner": "Sebastrion/awesome-unofficial-pc-ports"
+            }
+          },
+          {
+            "title": "Clair Obscur: Expedition 33 (1903340)",
+            "url": "https://github.com/ValveSoftware/Proton/issues/8626",
+            "number": 8626,
+            "updatedAt": "2026-05-08T20:42:19Z",
+            "repository": {
+              "nameWithOwner": "ValveSoftware/Proton"
+            }
+          }
+        ]
+      },
       "repositories": {
         "totalCount": 7,
         "nodes": [
           {
-            "name": "omarchy-ristretto",
-            "pushedAt": "2026-08-27T05:28:13Z",
-            "isPrivate": false,
-            "isArchived": false,
-            "isFork": false,
-            "openIssues": {
-              "totalCount": 0
-            },
-            "openPRCount": {
-              "totalCount": 0
-            },
-            "latestRelease": null,
-            "defaultBranchRef": {
-              "target": {
-                "oid": "2dff2b1db25032c103d13ec1c84c290e1f47ccfd",
-                "messageHeadline": "plugin: 1.0.2 -- origin is decided at the lock edge, not inferred fro\u2026",
-                "committedDate": "2026-08-27T05:28:12Z",
-                "statusCheckRollup": null
-              }
-            }
-          },
-          {
             "name": "omarchy-site",
-            "pushedAt": "2026-08-26T17:45:35Z",
+            "pushedAt": "2026-08-27T11:43:55Z",
             "isPrivate": false,
             "isArchived": false,
             "isFork": true,
+            "stargazerCount": 0,
             "openIssues": {
               "totalCount": 0
             },
@@ -75,11 +104,35 @@
             }
           },
           {
+            "name": "omarchy-ristretto",
+            "pushedAt": "2026-08-27T05:28:13Z",
+            "isPrivate": false,
+            "isArchived": false,
+            "isFork": false,
+            "stargazerCount": 1,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": null,
+            "defaultBranchRef": {
+              "target": {
+                "oid": "2dff2b1db25032c103d13ec1c84c290e1f47ccfd",
+                "messageHeadline": "plugin: 1.0.2 -- origin is decided at the lock edge, not inferred fro\u2026",
+                "committedDate": "2026-08-27T05:28:12Z",
+                "statusCheckRollup": null
+              }
+            }
+          },
+          {
             "name": "omarchy-nujabes-theme",
             "pushedAt": "2026-08-26T17:44:53Z",
             "isPrivate": false,
             "isArchived": false,
             "isFork": false,
+            "stargazerCount": 0,
             "openIssues": {
               "totalCount": 0
             },
@@ -102,6 +155,7 @@
             "isPrivate": false,
             "isArchived": false,
             "isFork": false,
+            "stargazerCount": 25,
             "openIssues": {
               "totalCount": 0
             },
@@ -129,6 +183,7 @@
             "isPrivate": false,
             "isArchived": true,
             "isFork": false,
+            "stargazerCount": 0,
             "openIssues": {
               "totalCount": 0
             },
@@ -156,6 +211,7 @@
             "isPrivate": false,
             "isArchived": false,
             "isFork": true,
+            "stargazerCount": 0,
             "openIssues": {
               "totalCount": 0
             },
@@ -178,6 +234,7 @@
             "isPrivate": false,
             "isArchived": false,
             "isFork": false,
+            "stargazerCount": 0,
             "openIssues": {
               "totalCount": 0
             },

@@ -194,6 +194,51 @@ test("mapNotifications: never evals title content even if it looks like code", f
   assert.strictEqual(global.__pwned, undefined)
 })
 
+// ------------------------------------------------- mapNotifications: F6 (own vs external)
+
+test("mapNotifications: login param sets isExternal/owner per item", function () {
+  var mapped = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "own repo", url: "" }, repository: { full_name: "HalmyLyseas/VandalHearts-PcPort" } },
+    { id: "2", unread: false, subject: { title: "external repo", url: "" }, repository: { full_name: "octocat/Hello-World" } }
+  ], "HalmyLyseas")
+  assert.strictEqual(mapped[0].owner, "HalmyLyseas")
+  assert.strictEqual(mapped[0].isExternal, false)
+  assert.strictEqual(mapped[1].owner, "octocat")
+  assert.strictEqual(mapped[1].isExternal, true)
+})
+
+test("mapNotifications: isExternal derivation is case-insensitive on the owner segment", function () {
+  var mapped = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "t", url: "" }, repository: { full_name: "HALMYLYSEAS/some-repo" } }
+  ], "halmylyseas")
+  assert.strictEqual(mapped[0].isExternal, false, "owner comparison must be case-insensitive")
+})
+
+test("mapNotifications: no login (undefined/empty) -- never external, never throws", function () {
+  var mapped = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "t", url: "" }, repository: { full_name: "octocat/Hello-World" } }
+  ])
+  assert.strictEqual(mapped[0].isExternal, false)
+  assert.strictEqual(mapped[0].owner, "octocat")
+
+  var mapped2 = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "t", url: "" }, repository: { full_name: "octocat/Hello-World" } }
+  ], "")
+  assert.strictEqual(mapped2[0].isExternal, false)
+})
+
+test("mapNotifications: missing/malformed repository.full_name -- owner is empty, never external, never throws", function () {
+  var mapped = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "t", url: "" }, repository: {} },
+    { id: "2", unread: true, subject: { title: "t2", url: "" }, repository: { full_name: "no-slash-here" } },
+    { id: "3", unread: true, subject: { title: "t3", url: "" }, repository: null }
+  ], "HalmyLyseas")
+  mapped.forEach(function (item) {
+    assert.strictEqual(item.owner, "")
+    assert.strictEqual(item.isExternal, false)
+  })
+})
+
 // ------------------------------------------------------------------- ciRollupToState
 
 test("ciRollupToState: maps every documented state", function () {
@@ -215,7 +260,7 @@ test("ciRollupToState: accepts a GraphQL-shaped { state } object too", function 
 
 // ------------------------------------------------------------------------- mapDashboard
 
-test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos", function () {
+test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/myIssues", function () {
   var raw = loadFixture("mega-graphql.json")
   var mapped = Model.mapDashboard(raw)
 
@@ -230,6 +275,11 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos"
   // empty state (no CI configured), not a query bug (see 04-github-data.md #3).
   assert.strictEqual(pr.ciState, "none")
   assert.strictEqual(pr.reviewDecision, "")
+  // F6: this PR is against a fork of a third-party repo (omacom-io), not
+  // the account's (HalmyLyseas) own -- a real live example of an external
+  // PR row, not a fabricated one.
+  assert.strictEqual(pr.owner, "omacom-io")
+  assert.strictEqual(pr.isExternal, true)
 
   assert.strictEqual(mapped.repos.length, raw.data.viewer.repositories.nodes.length)
   var repoWithRelease = mapped.repos.filter(function (r) { return r.name === "VandalHearts-PcPort" })[0]
@@ -238,6 +288,10 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos"
   assert.strictEqual(repoWithRelease.releaseUrl, "https://github.com/HalmyLyseas/VandalHearts-PcPort/releases/tag/v2.0.0")
   assert.strictEqual(repoWithRelease.url, "https://github.com/HalmyLyseas/VandalHearts-PcPort")
   assert.strictEqual(repoWithRelease.lastCommitHeadline, "gitignore: ignore platform/pc/timing_runs/")
+  assert.strictEqual(repoWithRelease.stars, 25)
+  assert.strictEqual(repoWithRelease.isArchived, false)
+  assert.strictEqual(repoWithRelease.isFork, false)
+  assert.strictEqual(repoWithRelease.isPrivate, false)
 
   var repoWithCi = mapped.repos.filter(function (r) { return r.name === "fe3h-companionApp" })[0]
   assert.ok(repoWithCi, "expected fe3h-companionApp in mapped repos")
@@ -245,6 +299,28 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos"
   var repoWithoutRelease = mapped.repos.filter(function (r) { return r.name === "omarchy-ristretto" })[0]
   assert.strictEqual(repoWithoutRelease.releaseTag, "")
   assert.strictEqual(repoWithoutRelease.releaseUrl, "")
+  assert.strictEqual(repoWithoutRelease.stars, 1)
+
+  // F2: the live archived-repo acceptance fixture -- flows through
+  // completely unfiltered (no isArchived query arg anywhere), pill-flagged.
+  var archivedRepo = mapped.repos.filter(function (r) { return r.name === "VandalHearts-decomp-SLPM-86007" })[0]
+  assert.ok(archivedRepo, "expected the archived VandalHearts-decomp repo in mapped repos -- must not be filtered out")
+  assert.strictEqual(archivedRepo.isArchived, true)
+  assert.strictEqual(Model.repoPill(archivedRepo), "archived")
+
+  var forkRepo = mapped.repos.filter(function (r) { return r.name === "omarchy-site" })[0]
+  assert.strictEqual(forkRepo.isFork, true)
+  assert.strictEqual(Model.repoPill(forkRepo), "fork")
+
+  // F3: the acceptance fixture issue -- authored by this account, in a repo
+  // it does not own, MUST appear in myIssues.
+  assert.strictEqual(mapped.myIssues.length, raw.data.viewer.myIssues.nodes.length)
+  var marketplaceIssue = mapped.myIssues.filter(function (i) { return i.number === 2672 })[0]
+  assert.ok(marketplaceIssue, "expected HANCORE-linux/omarchy-plugin-marketplace#2672 in myIssues")
+  assert.strictEqual(marketplaceIssue.repo, "HANCORE-linux/omarchy-plugin-marketplace")
+  assert.strictEqual(marketplaceIssue.webUrl, "https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2672")
+  assert.strictEqual(marketplaceIssue.owner, "HANCORE-linux")
+  assert.strictEqual(marketplaceIssue.isExternal, true)
 })
 
 test("mapDashboard: real review-requests-graphql empty-inbox fixture maps to []", function () {
@@ -278,7 +354,7 @@ test("mapDashboard: non-object / malformed input returns all-null per-section sh
   // []) when it did not resolve at all -- that's the explicit "don't
   // replace" signal the Service layer relies on. An envelope with no
   // usable `data` at all (these cases) means all three sections are null.
-  var allNull = { openPRs: null, reviewRequests: null, repos: null }
+  var allNull = { openPRs: null, reviewRequests: null, repos: null, myIssues: null }
   assert.deepStrictEqual(Model.mapDashboard(null), allNull)
   assert.deepStrictEqual(Model.mapDashboard(undefined), allNull)
   assert.deepStrictEqual(Model.mapDashboard("not json"), allNull)
@@ -317,15 +393,15 @@ test("mapDashboard: partial envelope (data present for some sections, errors for
 test("mapDashboard: fully-successful envelope with a coexisting (unrelated/empty) errors array still maps every section", function () {
   var mapped = Model.mapDashboard({
     data: {
-      viewer: { login: "me", openPRs: { nodes: [] }, repositories: { nodes: [] } },
+      viewer: { login: "me", openPRs: { nodes: [] }, repositories: { nodes: [] }, myIssues: { nodes: [] } },
       reviewRequests: { nodes: [] }
     },
     errors: []
   })
-  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [] })
+  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [] })
 })
 
-test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewRequests 20, repos 30)", function () {
+test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewRequests 20, repos 30, myIssues 20)", function () {
   function manyNodes(n, factory) {
     var nodes = []
     for (var i = 0; i < n; i++) nodes.push(factory(i))
@@ -336,7 +412,8 @@ test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewReque
       viewer: {
         login: "me",
         openPRs: { nodes: manyNodes(500, function (i) { return { title: "pr" + i, url: "", number: i, updatedAt: "", repository: { nameWithOwner: "o/r" } } }) },
-        repositories: { nodes: manyNodes(500, function (i) { return { name: "repo" + i } } ) }
+        repositories: { nodes: manyNodes(500, function (i) { return { name: "repo" + i } } ) },
+        myIssues: { nodes: manyNodes(500, function (i) { return { title: "issue" + i, url: "", number: i, updatedAt: "", repository: { nameWithOwner: "o/r" } } }) }
       },
       reviewRequests: { nodes: manyNodes(500, function (i) { return { title: "rr" + i, url: "", number: i, repository: { nameWithOwner: "o/r" } } }) }
     }
@@ -345,16 +422,17 @@ test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewReque
   assert.strictEqual(mapped.openPRs.length, 20)
   assert.strictEqual(mapped.reviewRequests.length, 20)
   assert.strictEqual(mapped.repos.length, 30)
+  assert.strictEqual(mapped.myIssues.length, 20)
 })
 
 test("mapDashboard: tolerates non-array `nodes` fields", function () {
   var mapped = Model.mapDashboard({
     data: {
-      viewer: { openPRs: { nodes: "not an array" }, repositories: { nodes: null } },
+      viewer: { openPRs: { nodes: "not an array" }, repositories: { nodes: null }, myIssues: { nodes: 7 } },
       reviewRequests: { nodes: 42 }
     }
   })
-  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [] })
+  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [] })
 })
 
 test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-review.md F2)", function () {
@@ -365,7 +443,8 @@ test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-
       viewer: {
         login: "me",
         openPRs: { nodes: [{ title: hugeText, url: "https://github.com/" + hugeTag, number: 1, updatedAt: hugeTag, repository: { nameWithOwner: hugeTag }, reviewDecision: hugeTag }] },
-        repositories: { nodes: [{ name: hugeTag, pushedAt: hugeTag, latestRelease: { tagName: hugeTag, url: "https://github.com/" + hugeTag }, defaultBranchRef: { target: { messageHeadline: hugeText } } }] }
+        repositories: { nodes: [{ name: hugeTag, pushedAt: hugeTag, latestRelease: { tagName: hugeTag, url: "https://github.com/" + hugeTag }, defaultBranchRef: { target: { messageHeadline: hugeText } } }] },
+        myIssues: { nodes: [{ title: hugeText, url: "https://github.com/" + hugeTag, number: 3, updatedAt: hugeTag, repository: { nameWithOwner: hugeTag } }] }
       },
       reviewRequests: { nodes: [{ title: hugeText, url: "https://github.com/" + hugeTag, number: 2, updatedAt: hugeTag, repository: { nameWithOwner: hugeTag } }] }
     }
@@ -374,10 +453,74 @@ test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-
   assert.strictEqual(mapped.openPRs[0].repo.length, Model.FIELD_CAP_TAG)
   assert.ok(mapped.openPRs[0].webUrl.length <= Model.FIELD_CAP_URL)
   assert.strictEqual(mapped.openPRs[0].reviewDecision.length, Model.FIELD_CAP_TAG)
+  // `owner` is derived from the (already-capped) `repo` field, so it is
+  // naturally bounded too -- no separate cap needed, just proof it doesn't
+  // explode past the repo field's own cap.
+  assert.ok(mapped.openPRs[0].owner.length <= Model.FIELD_CAP_TAG)
   assert.strictEqual(mapped.reviewRequests[0].title.length, Model.FIELD_CAP_TEXT)
   assert.strictEqual(mapped.repos[0].name.length, Model.FIELD_CAP_TAG)
   assert.strictEqual(mapped.repos[0].releaseTag.length, Model.FIELD_CAP_TAG)
   assert.strictEqual(mapped.repos[0].lastCommitHeadline.length, Model.FIELD_CAP_TEXT)
+  assert.strictEqual(mapped.myIssues[0].title.length, Model.FIELD_CAP_TEXT)
+  assert.strictEqual(mapped.myIssues[0].repo.length, Model.FIELD_CAP_TAG)
+  assert.ok(mapped.myIssues[0].webUrl.length <= Model.FIELD_CAP_URL)
+  assert.ok(mapped.myIssues[0].owner.length <= Model.FIELD_CAP_TAG)
+})
+
+// ---------------------------------------------------- mapDashboard: repos F1/F2 fields
+
+test("mapDashboard: repos gain stars/isArchived/isFork/isPrivate, strict boolean typing", function () {
+  var mapped = Model.mapDashboard({
+    data: {
+      viewer: {
+        login: "me",
+        openPRs: { nodes: [] },
+        repositories: {
+          nodes: [
+            { name: "r1", stargazerCount: 42, isArchived: true, isFork: false, isPrivate: false },
+            { name: "r2", stargazerCount: 0, isArchived: false, isFork: true, isPrivate: true }
+          ]
+        }
+      },
+      reviewRequests: { nodes: [] }
+    }
+  })
+  assert.strictEqual(mapped.repos[0].stars, 42)
+  assert.strictEqual(mapped.repos[0].isArchived, true)
+  assert.strictEqual(mapped.repos[0].isFork, false)
+  assert.strictEqual(mapped.repos[0].isPrivate, false)
+  assert.strictEqual(mapped.repos[1].stars, 0)
+  assert.strictEqual(mapped.repos[1].isFork, true)
+  assert.strictEqual(mapped.repos[1].isPrivate, true)
+})
+
+test("mapDashboard: repos -- adversarial huge stargazerCount, missing/non-boolean flags never throw", function () {
+  var mapped = Model.mapDashboard({
+    data: {
+      viewer: {
+        login: "me",
+        openPRs: { nodes: [] },
+        repositories: {
+          nodes: [
+            { name: "huge-stars", stargazerCount: Number.MAX_SAFE_INTEGER },
+            { name: "no-fields" },
+            { name: "malformed-flags", isArchived: "true", isFork: 1, isPrivate: null, stargazerCount: "not a number" }
+          ]
+        }
+      },
+      reviewRequests: { nodes: [] }
+    }
+  })
+  assert.strictEqual(mapped.repos[0].stars, Number.MAX_SAFE_INTEGER)
+  assert.strictEqual(mapped.repos[1].stars, 0)
+  assert.strictEqual(mapped.repos[1].isArchived, false)
+  assert.strictEqual(mapped.repos[1].isFork, false)
+  assert.strictEqual(mapped.repos[1].isPrivate, false)
+  // Non-boolean truthy values must not be coerced to true -- strict `=== true`.
+  assert.strictEqual(mapped.repos[2].isArchived, false)
+  assert.strictEqual(mapped.repos[2].isFork, false)
+  assert.strictEqual(mapped.repos[2].isPrivate, false)
+  assert.strictEqual(mapped.repos[2].stars, 0)
 })
 
 // -------------------------------------------------------------------- truncate
@@ -404,6 +547,147 @@ test("repoWebUrl: empty on missing login or name", function () {
   assert.strictEqual(Model.repoWebUrl("o", ""), "")
   assert.strictEqual(Model.repoWebUrl(null, "r"), "")
   assert.strictEqual(Model.repoWebUrl("o", null), "")
+})
+
+// -------------------------------------------------- ownerFromNameWithOwner / isExternalOwner
+
+test("ownerFromNameWithOwner: extracts the owner segment", function () {
+  assert.strictEqual(Model.ownerFromNameWithOwner("HalmyLyseas/VandalHearts-PcPort"), "HalmyLyseas")
+  assert.strictEqual(Model.ownerFromNameWithOwner("HANCORE-linux/omarchy-plugin-marketplace"), "HANCORE-linux")
+})
+
+test("ownerFromNameWithOwner: adversarial/missing input never throws, empty on no usable owner", function () {
+  assert.strictEqual(Model.ownerFromNameWithOwner(""), "")
+  assert.strictEqual(Model.ownerFromNameWithOwner(null), "")
+  assert.strictEqual(Model.ownerFromNameWithOwner(undefined), "")
+  assert.strictEqual(Model.ownerFromNameWithOwner(42), "")
+  assert.strictEqual(Model.ownerFromNameWithOwner("no-slash-at-all"), "")
+  assert.strictEqual(Model.ownerFromNameWithOwner("/leading-slash-no-owner"), "")
+  // Only the FIRST "/" delimits owner/repo -- a repo name containing a
+  // slash (can't happen on GitHub, but defend anyway) doesn't confuse this.
+  assert.strictEqual(Model.ownerFromNameWithOwner("owner/repo/extra"), "owner")
+})
+
+test("isExternalOwner: case-insensitive comparison (exchange/19-feedback-delta-spec.md F6)", function () {
+  assert.strictEqual(Model.isExternalOwner("HalmyLyseas", "HalmyLyseas"), false)
+  assert.strictEqual(Model.isExternalOwner("HALMYLYSEAS", "halmylyseas"), false)
+  assert.strictEqual(Model.isExternalOwner("HalmyLyseas", "halmylyseas"), false)
+  assert.strictEqual(Model.isExternalOwner("octocat", "HalmyLyseas"), true)
+})
+
+test("isExternalOwner: missing owner or login defaults to non-external (no false-positive pill), never throws", function () {
+  assert.strictEqual(Model.isExternalOwner("", "HalmyLyseas"), false)
+  assert.strictEqual(Model.isExternalOwner("octocat", ""), false)
+  assert.strictEqual(Model.isExternalOwner(null, undefined), false)
+  assert.strictEqual(Model.isExternalOwner(undefined, "HalmyLyseas"), false)
+  assert.strictEqual(Model.isExternalOwner(42, "HalmyLyseas"), false)
+})
+
+// ---------------------------------------------------------------------- repoPill
+
+test("repoPill: priority order archived > fork > private (exchange/19-feedback-delta-spec.md F2), one pill max", function () {
+  assert.strictEqual(Model.repoPill({ isArchived: true, isFork: false, isPrivate: false }), "archived")
+  assert.strictEqual(Model.repoPill({ isArchived: false, isFork: true, isPrivate: false }), "fork")
+  assert.strictEqual(Model.repoPill({ isArchived: false, isFork: false, isPrivate: true }), "private")
+  assert.strictEqual(Model.repoPill({ isArchived: false, isFork: false, isPrivate: false }), "")
+})
+
+test("repoPill: adversarial -- unknown/multiple-true combos still resolve to exactly one pill, archived wins", function () {
+  assert.strictEqual(Model.repoPill({ isArchived: true, isFork: true, isPrivate: true }), "archived")
+  assert.strictEqual(Model.repoPill({ isArchived: true, isFork: true, isPrivate: false }), "archived")
+  assert.strictEqual(Model.repoPill({ isArchived: false, isFork: true, isPrivate: true }), "fork")
+})
+
+test("repoPill: defensive on missing/malformed input, never throws", function () {
+  assert.strictEqual(Model.repoPill(null), "")
+  assert.strictEqual(Model.repoPill(undefined), "")
+  assert.strictEqual(Model.repoPill({}), "")
+  assert.strictEqual(Model.repoPill("not an object"), "")
+  assert.strictEqual(Model.repoPill({ isArchived: "yes" }), "", "non-boolean truthy value must not count as true")
+})
+
+// ---------------------------------------------------------------------- sortRepos
+
+function fakeRepo(name, pushedAt, stars) {
+  return { name: name, pushedAt: pushedAt, stars: stars }
+}
+
+test("sortRepos: activity mode sorts by pushedAt desc (default mode)", function () {
+  var repos = [
+    fakeRepo("old", "2026-01-01T00:00:00Z", 0),
+    fakeRepo("newest", "2026-08-27T00:00:00Z", 0),
+    fakeRepo("middle", "2026-04-01T00:00:00Z", 0)
+  ]
+  var sorted = Model.sortRepos(repos, "activity")
+  assert.deepStrictEqual(sorted.map(function (r) { return r.name }), ["newest", "middle", "old"])
+})
+
+test("sortRepos: stars mode sorts by stars desc, ties broken by pushedAt desc", function () {
+  var repos = [
+    fakeRepo("low-old", "2026-01-01T00:00:00Z", 5),
+    fakeRepo("high", "2026-02-01T00:00:00Z", 100),
+    fakeRepo("tie-newer", "2026-06-01T00:00:00Z", 5),
+    fakeRepo("tie-older", "2026-03-01T00:00:00Z", 5)
+  ]
+  var sorted = Model.sortRepos(repos, "stars")
+  assert.deepStrictEqual(sorted.map(function (r) { return r.name }), ["high", "tie-newer", "tie-older", "low-old"])
+})
+
+test("sortRepos: unrecognized mode falls back to activity, default (undefined) mode too", function () {
+  var repos = [fakeRepo("old", "2026-01-01T00:00:00Z", 999), fakeRepo("new", "2026-08-01T00:00:00Z", 1)]
+  assert.deepStrictEqual(Model.sortRepos(repos, "bogus-mode").map(function (r) { return r.name }), ["new", "old"])
+  assert.deepStrictEqual(Model.sortRepos(repos, undefined).map(function (r) { return r.name }), ["new", "old"])
+})
+
+test("sortRepos: does not mutate the input array, returns a new array", function () {
+  var repos = [fakeRepo("a", "2026-01-01T00:00:00Z", 1), fakeRepo("b", "2026-02-01T00:00:00Z", 2)]
+  var original = repos.slice()
+  var sorted = Model.sortRepos(repos, "stars")
+  assert.deepStrictEqual(repos, original, "input array must be untouched")
+  assert.notStrictEqual(sorted, repos, "must return a new array, not the same reference")
+})
+
+test("sortRepos: adversarial -- huge star values, missing/malformed pushedAt, non-array input, never throws", function () {
+  var repos = [
+    fakeRepo("huge", "2026-01-01T00:00:00Z", Number.MAX_SAFE_INTEGER),
+    fakeRepo("no-pushed-at", undefined, 3),
+    fakeRepo("bad-date", "not a date", 3),
+    { name: "no-stars-field", pushedAt: "2026-05-01T00:00:00Z" }
+  ]
+  var sorted = Model.sortRepos(repos, "stars")
+  assert.strictEqual(sorted.length, 4)
+  assert.strictEqual(sorted[0].name, "huge")
+  assert.deepStrictEqual(Model.sortRepos(null, "activity"), [])
+  assert.deepStrictEqual(Model.sortRepos(undefined, "stars"), [])
+  assert.deepStrictEqual(Model.sortRepos("not an array", "activity"), [])
+})
+
+// ---------------------------------------------------------------------- mergedSettings
+
+test("mergedSettings: merges a new/changed key onto the existing entry (does not drop other settings)", function () {
+  var current = { id: "halmylyseas.github-status", dashboardIntervalSec: 240, repoLimit: 15 }
+  var next = Model.mergedSettings(current, "repoSort", "stars")
+  assert.deepStrictEqual(next, { dashboardIntervalSec: 240, repoLimit: 15, repoSort: "stars" })
+})
+
+test("mergedSettings: strips any incoming `id` key -- the host adds its own", function () {
+  var current = { id: "old-id", repoSort: "activity" }
+  var next = Model.mergedSettings(current, "repoSort", "stars")
+  assert.strictEqual(next.id, undefined)
+  assert.strictEqual(next.repoSort, "stars")
+})
+
+test("mergedSettings: defensive on missing/malformed `current`, never throws", function () {
+  assert.deepStrictEqual(Model.mergedSettings(null, "repoSort", "stars"), { repoSort: "stars" })
+  assert.deepStrictEqual(Model.mergedSettings(undefined, "repoSort", "stars"), { repoSort: "stars" })
+  assert.deepStrictEqual(Model.mergedSettings("not an object", "repoSort", "stars"), { repoSort: "stars" })
+})
+
+test("mergedSettings: overwrites an existing value for the same key", function () {
+  var current = { repoSort: "activity", repoLimit: 10 }
+  var next = Model.mergedSettings(current, "repoSort", "stars")
+  assert.strictEqual(next.repoSort, "stars")
+  assert.strictEqual(next.repoLimit, 10)
 })
 
 // ------------------------------------------------------------------------ relativeTime
