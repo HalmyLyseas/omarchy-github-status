@@ -40,8 +40,9 @@ is never performed by an agent.**
    no disk cache / no FileView; `Text.PlainText` on all remote strings;
    URL opens allowlisted to `https://github.com/` and spawned as an
    argument array (no shell); no package-manager command strings in any
-   shipped doc; no systemctl/.service; fixed command strings only — remote
-   data is never interpolated into a shell string.
+   shipped doc; no service-manager invocations or unit files; fixed
+   command strings only — remote data is never interpolated into a shell
+   string.
 4. **Never modify anything under `/usr/share/omarchy/`** (reading is
    encouraged). Never `omarchy plugin clone` a first-party plugin. Never
    run `omarchy refresh` / `omarchy reinstall`.

@@ -28,6 +28,18 @@ var CAP_PRS = 20
 var CAP_REVIEW_REQUESTS = 20
 var CAP_REPOS = 30
 
+// Per-field string-length caps (exchange/11-s5a-security-review.md F2): list
+// LENGTH is already capped above; this bounds individual field length too,
+// so a pathological/compromised remote field (title, headline, url, ...)
+// can't grow the panel's memory/re-render cost unboundedly. Real GitHub API
+// data never approaches these (issue/PR titles are server-capped ~256
+// chars); this is defense-in-depth against a future API change, a
+// misconfigured `gh` host, or a new field added later without the same
+// care -- not a response to an observed real-world payload.
+var FIELD_CAP_TEXT = 300    // titles / commit headlines
+var FIELD_CAP_TAG = 100     // reasons / repo identifiers / release tags / timestamps
+var FIELD_CAP_URL = 2048    // urls
+
 var MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
@@ -55,6 +67,11 @@ function safeNum(v, fallback) {
   return typeof v === "number" && !isNaN(v) ? v : (fallback === undefined ? 0 : fallback)
 }
 
+function truncate(v, maxLen, fallback) {
+  var s = safeStr(v, fallback)
+  return s.length > maxLen ? s.slice(0, maxLen) : s
+}
+
 // ----------------------------------------------------- URL translation
 
 // api.github.com REST subject -> a github.com web URL, string-rewrite only
@@ -63,7 +80,18 @@ function safeNum(v, fallback) {
 // mapped list items use. Returns "" when the subject type/url doesn't match
 // a known pattern -- the caller is expected to fall back to the containing
 // repository's html_url in that case.
-var API_URL_RE = /^https:\/\/api\.github\.com\/repos\/([^\/]+)\/([^\/]+)\/(issues|pulls|releases|discussions|commits)\/(.+)$/
+//
+// Hardened per exchange/11-s5a-security-review.md F1: owner/repo are
+// restricted to the real GitHub identifier charset ([A-Za-z0-9_.-]+, no
+// slash/control chars/whitespace can sneak through), and the trailing ID
+// segment is captured loosely only long enough to be validated below
+// against a charset specific to its API segment (numeric ID for
+// issues/pulls/releases/discussions, hex SHA for commits) -- never the
+// unbounded/unfiltered `(.+)$` the finding flagged. A crafted
+// `.../pulls/1; rm -rf /` (the finding's own example) already fails to
+// match at all (the embedded "/" breaks the `[^\/]+` rest capture before ID
+// validation even runs).
+var API_URL_RE = /^https:\/\/api\.github\.com\/repos\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(issues|pulls|releases|discussions|commits)\/([^\/]+)$/
 var SEGMENT_TO_WEB = {
   issues: "issues",
   pulls: "pull",       // the one real gotcha: plural API segment, singular web segment
@@ -71,11 +99,18 @@ var SEGMENT_TO_WEB = {
   discussions: "discussions",
   commits: "commit"    // also irregular: plural API segment, singular web segment
 }
+var SEGMENT_ID_RE = {
+  issues: /^\d+$/,
+  pulls: /^\d+$/,
+  releases: /^\d+$/,
+  discussions: /^\d+$/,
+  commits: /^[0-9a-fA-F]{4,40}$/   // abbreviated-to-full commit SHA
+}
 
 function apiUrlToWebUrl(subject) {
   if (!isObject(subject)) return ""
   var url = subject.url
-  if (!isString(url)) return ""
+  if (!isString(url) || url.length === 0 || url.length > FIELD_CAP_URL) return ""
   var m = API_URL_RE.exec(url)
   if (!m) return ""
   var owner = m[1]
@@ -83,7 +118,8 @@ function apiUrlToWebUrl(subject) {
   var apiSegment = m[3]
   var rest = m[4]
   var webSegment = SEGMENT_TO_WEB[apiSegment]
-  if (!webSegment || !rest) return ""
+  var idRe = SEGMENT_ID_RE[apiSegment]
+  if (!webSegment || !idRe || !idRe.test(rest)) return ""
   return "https://github.com/" + owner + "/" + repo + "/" + webSegment + "/" + rest
 }
 
@@ -100,17 +136,17 @@ function mapNotifications(json) {
     if (!isObject(n)) continue
     var subject = isObject(n.subject) ? n.subject : {}
     var repository = isObject(n.repository) ? n.repository : {}
-    var repo = safeStr(repository.full_name, "")
+    var repo = truncate(repository.full_name, FIELD_CAP_TAG)
     var webUrl = apiUrlToWebUrl(subject)
-    if (!webUrl) webUrl = safeStr(repository.html_url, "")
+    if (!webUrl) webUrl = truncate(repository.html_url, FIELD_CAP_URL)
     out.push({
-      id: safeStr(n.id, String(i)),
+      id: truncate(n.id, FIELD_CAP_TAG, String(i)),
       unread: n.unread === true,
-      reason: safeStr(n.reason, ""),
-      title: safeStr(subject.title, ""),
+      reason: truncate(n.reason, FIELD_CAP_TAG),
+      title: truncate(subject.title, FIELD_CAP_TEXT),
       repo: repo,
-      webUrl: webUrl,
-      updatedAt: safeStr(n.updated_at, "")
+      webUrl: truncate(webUrl, FIELD_CAP_URL),
+      updatedAt: truncate(n.updated_at, FIELD_CAP_TAG)
     })
   }
   return out
@@ -137,22 +173,13 @@ function ciRollupToState(rollup) {
 
 // ------------------------------------------------------------------ dashboard
 
-// Raw shape: the parsed body of the mega GraphQL query
-// (exchange/04-github-data.md #6 / exchange/samples/mega-graphql.json):
-// { data: { viewer: { openPRs: {nodes:[...]}, repositories: {nodes:[...]} },
-//           reviewRequests: { nodes: [...] } } }
-function mapDashboard(json) {
-  var empty = { openPRs: [], reviewRequests: [], repos: [] }
-  if (!isObject(json)) return empty
-  var data = isObject(json.data) ? json.data : {}
-  var viewer = isObject(data.viewer) ? data.viewer : {}
-
-  var prNodes = isObject(viewer.openPRs) && isArray(viewer.openPRs.nodes) ? viewer.openPRs.nodes : []
+function mapOpenPRs(nodes) {
+  var arr = isArray(nodes) ? nodes : []
   var openPRs = []
-  for (var i = 0; i < prNodes.length && openPRs.length < CAP_PRS; i++) {
-    var pr = prNodes[i]
+  for (var i = 0; i < arr.length && openPRs.length < CAP_PRS; i++) {
+    var pr = arr[i]
     if (!isObject(pr)) continue
-    var prRepo = isObject(pr.repository) ? safeStr(pr.repository.nameWithOwner, "") : ""
+    var prRepo = isObject(pr.repository) ? truncate(pr.repository.nameWithOwner, FIELD_CAP_TAG) : ""
     var rollup = null
     if (isObject(pr.commits) && isArray(pr.commits.nodes) && pr.commits.nodes.length > 0) {
       var lastCommitNode = pr.commits.nodes[pr.commits.nodes.length - 1]
@@ -161,54 +188,96 @@ function mapDashboard(json) {
       }
     }
     openPRs.push({
-      title: safeStr(pr.title, ""),
+      title: truncate(pr.title, FIELD_CAP_TEXT),
       repo: prRepo,
       number: safeNum(pr.number, 0),
-      webUrl: safeStr(pr.url, ""),
-      updatedAt: safeStr(pr.updatedAt, ""),
+      webUrl: truncate(pr.url, FIELD_CAP_URL),
+      updatedAt: truncate(pr.updatedAt, FIELD_CAP_TAG),
       isDraft: pr.isDraft === true,
       ciState: ciRollupToState(rollup),
-      reviewDecision: isString(pr.reviewDecision) ? pr.reviewDecision : ""
+      reviewDecision: truncate(isString(pr.reviewDecision) ? pr.reviewDecision : "", FIELD_CAP_TAG)
     })
   }
+  return openPRs
+}
 
-  var reviewNodes = isObject(data.reviewRequests) && isArray(data.reviewRequests.nodes) ? data.reviewRequests.nodes : []
+function mapReviewRequests(nodes) {
+  var arr = isArray(nodes) ? nodes : []
   var reviewRequests = []
-  for (var j = 0; j < reviewNodes.length && reviewRequests.length < CAP_REVIEW_REQUESTS; j++) {
-    var rr = reviewNodes[j]
+  for (var j = 0; j < arr.length && reviewRequests.length < CAP_REVIEW_REQUESTS; j++) {
+    var rr = arr[j]
     if (!isObject(rr)) continue
-    var rrRepo = isObject(rr.repository) ? safeStr(rr.repository.nameWithOwner, "") : ""
+    var rrRepo = isObject(rr.repository) ? truncate(rr.repository.nameWithOwner, FIELD_CAP_TAG) : ""
     reviewRequests.push({
-      title: safeStr(rr.title, ""),
+      title: truncate(rr.title, FIELD_CAP_TEXT),
       repo: rrRepo,
       number: safeNum(rr.number, 0),
-      webUrl: safeStr(rr.url, ""),
-      updatedAt: safeStr(rr.updatedAt, "")
+      webUrl: truncate(rr.url, FIELD_CAP_URL),
+      updatedAt: truncate(rr.updatedAt, FIELD_CAP_TAG)
     })
   }
+  return reviewRequests
+}
 
-  var login = safeStr(viewer.login, "")
-  var repoNodes = isObject(viewer.repositories) && isArray(viewer.repositories.nodes) ? viewer.repositories.nodes : []
+function mapRepos(login, nodes) {
+  var arr = isArray(nodes) ? nodes : []
   var repos = []
-  for (var k = 0; k < repoNodes.length && repos.length < CAP_REPOS; k++) {
-    var r = repoNodes[k]
+  for (var k = 0; k < arr.length && repos.length < CAP_REPOS; k++) {
+    var r = arr[k]
     if (!isObject(r)) continue
     var release = isObject(r.latestRelease) ? r.latestRelease : null
     var branchTarget = isObject(r.defaultBranchRef) && isObject(r.defaultBranchRef.target) ? r.defaultBranchRef.target : null
-    var name = safeStr(r.name, "")
+    var name = truncate(r.name, FIELD_CAP_TAG)
     repos.push({
       name: name,
-      url: repoWebUrl(login, name),
-      pushedAt: safeStr(r.pushedAt, ""),
+      url: truncate(repoWebUrl(login, name), FIELD_CAP_URL),
+      pushedAt: truncate(r.pushedAt, FIELD_CAP_TAG),
       openIssues: isObject(r.openIssues) ? safeNum(r.openIssues.totalCount, 0) : 0,
       openPRs: isObject(r.openPRCount) ? safeNum(r.openPRCount.totalCount, 0) : 0,
-      releaseTag: release ? safeStr(release.tagName, "") : "",
-      releaseUrl: release ? safeStr(release.url, "") : "",
-      lastCommitHeadline: branchTarget ? safeStr(branchTarget.messageHeadline, "") : ""
+      releaseTag: release ? truncate(release.tagName, FIELD_CAP_TAG) : "",
+      releaseUrl: release ? truncate(release.url, FIELD_CAP_URL) : "",
+      lastCommitHeadline: branchTarget ? truncate(branchTarget.messageHeadline, FIELD_CAP_TEXT) : ""
     })
   }
+  return repos
+}
 
-  return { openPRs: openPRs, reviewRequests: reviewRequests, repos: repos }
+// Raw shape: the parsed body of the mega GraphQL query
+// (exchange/04-github-data.md #6 / exchange/samples/mega-graphql.json):
+// { data: { viewer: { openPRs: {nodes:[...]}, repositories: {nodes:[...]} },
+//           reviewRequests: { nodes: [...] } } }
+//
+// Per-section contract (exchange/12-s5b-correctness-review.md F4): GraphQL
+// allows a response to carry `data` for the fields that resolved AND
+// `errors` for the ones that didn't in the SAME envelope (GitHub's `search`
+// -- used for reviewRequests -- has its own stricter rate-limit bucket
+// separate from the object-graph API, so it's realistic for reviewRequests
+// to error out while openPRs/repositories succeed in the same call). Each
+// of the three returned sections is either a mapped array (the source field
+// was present as an object in `data`, however many/few nodes it had -- an
+// empty array is a legitimate "genuinely nothing here", not "unusable") or
+// `null`, which is the explicit "this section did not resolve -- caller
+// must NOT replace its last-good value" signal. A whole-envelope failure
+// (non-object `json`, missing/non-object `json.data`) returns all three as
+// null, which is the correct "nothing usable" case the caller treats as a
+// full fetch failure.
+function mapDashboard(json) {
+  var result = { openPRs: null, reviewRequests: null, repos: null }
+  if (!isObject(json)) return result
+  var data = isObject(json.data) ? json.data : null
+  if (!data) return result
+
+  var viewer = isObject(data.viewer) ? data.viewer : null
+  if (viewer && isObject(viewer.openPRs)) {
+    result.openPRs = mapOpenPRs(viewer.openPRs.nodes)
+  }
+  if (viewer && isObject(viewer.repositories)) {
+    result.repos = mapRepos(safeStr(viewer.login, ""), viewer.repositories.nodes)
+  }
+  if (isObject(data.reviewRequests)) {
+    result.reviewRequests = mapReviewRequests(data.reviewRequests.nodes)
+  }
+  return result
 }
 
 // `viewer.repositories.nodes[].name` in the mega query is a bare repo name
@@ -252,12 +321,31 @@ function relativeTime(iso, nowMs) {
 // plain prefix check (anchored regex), not a hostname parse, so it has no
 // dependency on a URL-parsing global that may not exist in the QML JS
 // engine. "https://github.com.evil.com/..." fails because the character
-// right after the literal "github.com" must be "/", never ".".
+// right after the literal "github.com" must be "/", never ".". The
+// userinfo trick ("https://github.com@evil.com/...") is also already
+// rejected by this same prefix requirement: the character immediately
+// after "github.com" there is "@", not "/", so it never matches either --
+// asserted with an explicit test in test/model.test.js per
+// exchange/11-s5a-security-review.md F1.
 var SAFE_GITHUB_URL_RE = /^https:\/\/github\.com\//
+
+// Hardened per exchange/11-s5a-security-review.md F1: the plain prefix
+// check above has no `$` anchor and no character-class restriction on what
+// follows the required prefix, so a string like
+// "https://github.com/\n../evil" (a literal newline right after the
+// prefix) used to pass. This is the last allowlist gate before
+// Quickshell.execDetached(["xdg-open", url]) in Service.qml, so it now also
+// rejects any control character or whitespace anywhere in the string, and
+// caps overall length -- defense-in-depth on top of execDetached's own
+// array-form (no shell reparse) call shape.
+var CONTROL_OR_WHITESPACE_RE = /[\x00-\x20\x7f]/
 
 function isSafeGithubUrl(url) {
   if (!isString(url)) return false
-  return SAFE_GITHUB_URL_RE.test(url)
+  if (url.length === 0 || url.length > FIELD_CAP_URL) return false
+  if (!SAFE_GITHUB_URL_RE.test(url)) return false
+  if (CONTROL_OR_WHITESPACE_RE.test(url)) return false
+  return true
 }
 
 // ------------------------------------------------------------- failure shapes
@@ -376,6 +464,10 @@ if (typeof module !== "undefined" && module.exports) {
     parseHeadersAndBody: parseHeadersAndBody,
     badgeText: badgeText,
     summaryTooltip: summaryTooltip,
-    repoWebUrl: repoWebUrl
+    repoWebUrl: repoWebUrl,
+    truncate: truncate,
+    FIELD_CAP_TEXT: FIELD_CAP_TEXT,
+    FIELD_CAP_TAG: FIELD_CAP_TAG,
+    FIELD_CAP_URL: FIELD_CAP_URL
   }
 }

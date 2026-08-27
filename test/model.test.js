@@ -64,6 +64,40 @@ test("apiUrlToWebUrl: unknown/unmatched subject type -> empty string (caller fal
   assert.strictEqual(Model.apiUrlToWebUrl({ url: "not a url at all" }), "")
 })
 
+// ---------------------------------------------- apiUrlToWebUrl (adversarial, S5a F1)
+
+test("apiUrlToWebUrl: shell-metacharacter-shaped trailing content is rejected (exchange/11-s5a-security-review.md F1)", function () {
+  // The finding's own repro: an embedded slash breaks the [^\/]+ rest
+  // capture before ID validation even runs, so this never matches at all.
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "PullRequest", url: "https://api.github.com/repos/o/r/pulls/1; rm -rf /" }), "")
+  // No embedded slash, but the ID segment isn't all-digits -- rejected by
+  // SEGMENT_ID_RE instead.
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "PullRequest", url: "https://api.github.com/repos/o/r/pulls/1;+rm+-rf" }), "")
+  // Control character (newline) inside the ID segment.
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "PullRequest", url: "https://api.github.com/repos/o/r/pulls/1\n../evil" }), "")
+})
+
+test("apiUrlToWebUrl: owner/repo restricted to the real GitHub identifier charset", function () {
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Issue", url: "https://api.github.com/repos/o!/r/issues/5" }), "")
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Issue", url: "https://api.github.com/repos/o/r r/issues/5" }), "")
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Issue", url: "https://api.github.com/repos/o/r?evil=1/issues/5" }), "")
+})
+
+test("apiUrlToWebUrl: numeric-ID segments reject non-numeric content", function () {
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Issue", url: "https://api.github.com/repos/o/r/issues/5abc" }), "")
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Release", url: "https://api.github.com/repos/o/r/releases/latest" }), "")
+})
+
+test("apiUrlToWebUrl: commit SHA segment accepts hex, rejects non-hex", function () {
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Commit", url: "https://api.github.com/repos/o/r/commits/deadbeef" }), "https://github.com/o/r/commit/deadbeef")
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Commit", url: "https://api.github.com/repos/o/r/commits/not-a-sha" }), "")
+})
+
+test("apiUrlToWebUrl: overlong url is rejected", function () {
+  var hugeOwner = new Array(3000).join("a")
+  assert.strictEqual(Model.apiUrlToWebUrl({ type: "Issue", url: "https://api.github.com/repos/" + hugeOwner + "/r/issues/5" }), "")
+})
+
 // ------------------------------------------------------------- mapNotifications
 
 test("mapNotifications: real fixture maps every item with expected shape", function () {
@@ -135,6 +169,20 @@ test("mapNotifications: rich-text/HTML-ish titles pass through untouched (mappin
     { id: "1", unread: true, subject: { title: evil, url: "" }, repository: { full_name: "o/r" } }
   ])
   assert.strictEqual(mapped[0].title, evil)
+})
+
+test("mapNotifications: per-field string length is capped (exchange/11-s5a-security-review.md F2)", function () {
+  var hugeTitle = new Array(1024 * 1024 + 2).join("x")   // ~1MB
+  var hugeReason = new Array(10000).join("y")
+  var hugeRepo = new Array(10000).join("z")
+  var mapped = Model.mapNotifications([
+    { id: "1", unread: true, reason: hugeReason, subject: { title: hugeTitle, url: "" }, repository: { full_name: hugeRepo, html_url: "https://github.com/" + new Array(5000).join("w") } }
+  ])
+  assert.strictEqual(mapped[0].title.length, Model.FIELD_CAP_TEXT)
+  assert.strictEqual(mapped[0].title, hugeTitle.slice(0, Model.FIELD_CAP_TEXT))
+  assert.strictEqual(mapped[0].reason.length, Model.FIELD_CAP_TAG)
+  assert.strictEqual(mapped[0].repo.length, Model.FIELD_CAP_TAG)
+  assert.ok(mapped[0].webUrl.length <= Model.FIELD_CAP_URL)
 })
 
 test("mapNotifications: never evals title content even if it looks like code", function () {
@@ -225,16 +273,56 @@ test("mapDashboard: populated reviewRequests map correctly", function () {
   assert.strictEqual(mapped.reviewRequests[0].number, 9)
 })
 
-test("mapDashboard: non-object / malformed input returns empty shape, never throws", function () {
-  var empty = { openPRs: [], reviewRequests: [], repos: [] }
-  assert.deepStrictEqual(Model.mapDashboard(null), empty)
-  assert.deepStrictEqual(Model.mapDashboard(undefined), empty)
-  assert.deepStrictEqual(Model.mapDashboard("not json"), empty)
-  assert.deepStrictEqual(Model.mapDashboard(42), empty)
-  assert.deepStrictEqual(Model.mapDashboard([]), empty)
-  assert.deepStrictEqual(Model.mapDashboard({}), empty)
-  assert.deepStrictEqual(Model.mapDashboard({ data: null }), empty)
-  assert.deepStrictEqual(Model.mapDashboard({ data: { viewer: null, reviewRequests: null } }), empty)
+test("mapDashboard: non-object / malformed input returns all-null per-section shape (nothing usable -- caller must not replace last-good data), never throws", function () {
+  // Per exchange/12-s5b-correctness-review.md F4, a section is `null` (not
+  // []) when it did not resolve at all -- that's the explicit "don't
+  // replace" signal the Service layer relies on. An envelope with no
+  // usable `data` at all (these cases) means all three sections are null.
+  var allNull = { openPRs: null, reviewRequests: null, repos: null }
+  assert.deepStrictEqual(Model.mapDashboard(null), allNull)
+  assert.deepStrictEqual(Model.mapDashboard(undefined), allNull)
+  assert.deepStrictEqual(Model.mapDashboard("not json"), allNull)
+  assert.deepStrictEqual(Model.mapDashboard(42), allNull)
+  assert.deepStrictEqual(Model.mapDashboard([]), allNull)
+  assert.deepStrictEqual(Model.mapDashboard({}), allNull)
+  assert.deepStrictEqual(Model.mapDashboard({ data: null }), allNull)
+  assert.deepStrictEqual(Model.mapDashboard({ data: { viewer: null, reviewRequests: null } }), allNull)
+})
+
+// ------------------------------------------- mapDashboard partial-GraphQL (S5b F4)
+
+test("mapDashboard: partial envelope (data present for some sections, errors for others) keeps the sections that parsed, nulls the rest", function () {
+  // Realistic shape: reviewRequests (via GraphQL `search`, its own stricter
+  // rate-limit bucket) errored out; openPRs/repositories still resolved in
+  // the same envelope, alongside a top-level `errors` array.
+  var partial = {
+    data: {
+      viewer: {
+        login: "me",
+        openPRs: { nodes: [{ title: "Fix bug", url: "https://github.com/o/r/pull/1", number: 1, updatedAt: "2026-01-01T00:00:00Z", repository: { nameWithOwner: "o/r" } }] },
+        repositories: { nodes: [{ name: "r" }] }
+      },
+      reviewRequests: null
+    },
+    errors: [{ message: "Something went wrong while executing your query. Please include `X-abc` when reporting this issue." }]
+  }
+  var mapped = Model.mapDashboard(partial)
+  assert.strictEqual(mapped.openPRs.length, 1)
+  assert.strictEqual(mapped.openPRs[0].title, "Fix bug")
+  assert.strictEqual(mapped.repos.length, 1)
+  assert.strictEqual(mapped.reviewRequests, null, "the errored section must be null, not []," +
+    " so the Service layer knows not to replace last-good reviewRequests")
+})
+
+test("mapDashboard: fully-successful envelope with a coexisting (unrelated/empty) errors array still maps every section", function () {
+  var mapped = Model.mapDashboard({
+    data: {
+      viewer: { login: "me", openPRs: { nodes: [] }, repositories: { nodes: [] } },
+      reviewRequests: { nodes: [] }
+    },
+    errors: []
+  })
+  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [] })
 })
 
 test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewRequests 20, repos 30)", function () {
@@ -267,6 +355,42 @@ test("mapDashboard: tolerates non-array `nodes` fields", function () {
     }
   })
   assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [] })
+})
+
+test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-review.md F2)", function () {
+  var hugeText = new Array(1024 * 1024 + 2).join("x")
+  var hugeTag = new Array(10000).join("y")
+  var mapped = Model.mapDashboard({
+    data: {
+      viewer: {
+        login: "me",
+        openPRs: { nodes: [{ title: hugeText, url: "https://github.com/" + hugeTag, number: 1, updatedAt: hugeTag, repository: { nameWithOwner: hugeTag }, reviewDecision: hugeTag }] },
+        repositories: { nodes: [{ name: hugeTag, pushedAt: hugeTag, latestRelease: { tagName: hugeTag, url: "https://github.com/" + hugeTag }, defaultBranchRef: { target: { messageHeadline: hugeText } } }] }
+      },
+      reviewRequests: { nodes: [{ title: hugeText, url: "https://github.com/" + hugeTag, number: 2, updatedAt: hugeTag, repository: { nameWithOwner: hugeTag } }] }
+    }
+  })
+  assert.strictEqual(mapped.openPRs[0].title.length, Model.FIELD_CAP_TEXT)
+  assert.strictEqual(mapped.openPRs[0].repo.length, Model.FIELD_CAP_TAG)
+  assert.ok(mapped.openPRs[0].webUrl.length <= Model.FIELD_CAP_URL)
+  assert.strictEqual(mapped.openPRs[0].reviewDecision.length, Model.FIELD_CAP_TAG)
+  assert.strictEqual(mapped.reviewRequests[0].title.length, Model.FIELD_CAP_TEXT)
+  assert.strictEqual(mapped.repos[0].name.length, Model.FIELD_CAP_TAG)
+  assert.strictEqual(mapped.repos[0].releaseTag.length, Model.FIELD_CAP_TAG)
+  assert.strictEqual(mapped.repos[0].lastCommitHeadline.length, Model.FIELD_CAP_TEXT)
+})
+
+// -------------------------------------------------------------------- truncate
+
+test("truncate: passes short strings through, caps long ones, defends bad input", function () {
+  assert.strictEqual(Model.truncate("short", 10), "short")
+  assert.strictEqual(Model.truncate("a very long string here", 5), "a ver")
+  assert.strictEqual(Model.truncate(null, 5), "")
+  assert.strictEqual(Model.truncate(undefined, 5, "abc"), "abc")
+  assert.strictEqual(Model.truncate(42, 5, "42"), "42")
+  // A caller-supplied fallback longer than maxLen is truncated too --
+  // truncate's cap is unconditional, not just for the primary value.
+  assert.strictEqual(Model.truncate(undefined, 5, "fallback"), "fallb")
 })
 
 // -------------------------------------------------------------------- repoWebUrl
@@ -341,6 +465,34 @@ test("isSafeGithubUrl: rejects non-string / missing input, never throws", functi
 test("isSafeGithubUrl: rejects a github.com URL used only as a substring/query trick", function () {
   assert.strictEqual(Model.isSafeGithubUrl("https://evil.com/?next=https://github.com/"), false)
   assert.strictEqual(Model.isSafeGithubUrl("https://evil.com/https://github.com/"), false)
+})
+
+// ------------------------------------------------ isSafeGithubUrl (adversarial, S5a F1)
+
+test("isSafeGithubUrl: rejects the userinfo trick explicitly (exchange/11-s5a-security-review.md F1(c))", function () {
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com@evil.com/"), false)
+  assert.strictEqual(Model.isSafeGithubUrl("https://user:pass@github.com/o/r"), false)
+})
+
+test("isSafeGithubUrl: rejects a literal newline right after the required prefix (exchange/11-s5a-security-review.md F1, MUST-cover case)", function () {
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com/\n../evil"), false)
+})
+
+test("isSafeGithubUrl: rejects any control character or whitespace anywhere in the string", function () {
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com/o/r\n"), false)
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com/o/r\t/evil"), false)
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com/o/r\r\nSet-Cookie: x"), false)
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com/o r"), false)
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com/o/r\x00trailing"), false)
+  assert.strictEqual(Model.isSafeGithubUrl("https://github.com/o/r\x7f"), false)
+})
+
+test("isSafeGithubUrl: rejects overlong urls, accepts right at the cap", function () {
+  var prefix = "https://github.com/"
+  var okAtCap = prefix + "a".repeat(Model.FIELD_CAP_URL - prefix.length)
+  assert.strictEqual(okAtCap.length, Model.FIELD_CAP_URL)
+  assert.strictEqual(Model.isSafeGithubUrl(okAtCap), true)
+  assert.strictEqual(Model.isSafeGithubUrl(okAtCap + "a"), false)
 })
 
 // -------------------------------------------------------------------- classifyFailure
