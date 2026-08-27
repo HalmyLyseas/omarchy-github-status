@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# test/mocks/gh -- PATH-shadowing mock of the `gh` CLI for script tests.
+#
+# Serves canned fixture responses based on argv, mimicking the exact shapes
+# observed against the real API (exchange/04-github-data.md, cross-checked
+# live again while building this mock -- see exchange/07-s1-scaffold.md).
+#
+# Behavior is steered by $GH_MOCK_MODE (default "ok"):
+#   ok        -- everything succeeds, `gh api user --jq .login` -> "HalmyLyseas"
+#   unauth    -- `gh api user` fails like a real HTTP 401 / "Bad credentials"
+#   offline   -- `gh api user` fails like a real unreachable-network error
+#
+# Fixture directory is resolved relative to this script's own location so it
+# works regardless of the caller's cwd.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FIXTURES="$SCRIPT_DIR/../fixtures"
+MODE="${GH_MOCK_MODE:-ok}"
+
+# --- gh api user --jq .login (probe-auth) ----------------------------------
+if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
+  case "$MODE" in
+    unauth)
+      echo '{"message": "Bad credentials","documentation_url": "https://docs.github.com/rest","status": "401"}'
+      echo "gh: Bad credentials (HTTP 401)" >&2
+      exit 1
+      ;;
+    offline)
+      echo 'Get "https://api.github.com/user": dial tcp 127.0.0.1:1: connect: connection refused' >&2
+      exit 1
+      ;;
+    *)
+      echo "HalmyLyseas"
+      exit 0
+      ;;
+  esac
+fi
+
+# --- gh api -i notifications [-H "If-None-Match: <etag>"] ------------------
+if [[ "${1:-}" == "api" && "${2:-}" == "-i" && "${3:-}" == "notifications" ]]; then
+  if_none_match=""
+  shift 3
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -H)
+        if [[ "${2:-}" == If-None-Match:* ]]; then
+          if_none_match="${2#If-None-Match: }"
+        fi
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -n "$if_none_match" && "$if_none_match" == '"mock-etag-v1"' ]]; then
+    cat "$FIXTURES/notifications-i-304.txt"
+    echo "gh: HTTP 304" >&2
+    exit 1
+  fi
+
+  cat "$FIXTURES/notifications-i-200.txt"
+  exit 0
+fi
+
+# --- gh api graphql -F query=@- ---------------------------------------------
+if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
+  # Consume stdin (the query text) so the caller's heredoc pipe doesn't hang,
+  # but the mock doesn't need its contents to serve a canned fixture.
+  cat >/dev/null
+  cat "$FIXTURES/mega-graphql.json"
+  exit 0
+fi
+
+echo "gh mock: unhandled invocation: $*" >&2
+exit 2

@@ -1,0 +1,9 @@
+HTTP/2.0 304 Not Modified
+Cache-Control: private, max-age=60, s-maxage=60
+Etag: "mock-etag-v1"
+X-Poll-Interval: 60
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4964
+X-Ratelimit-Reset: 1787827562
+X-Ratelimit-Resource: core
+
