@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# scripts/fetch-notifications -- one read-only REST call to list the
+# viewer's GitHub notifications, with response headers included (-i) so the
+# caller can extract ETag/X-Poll-Interval for conditional polling.
+#
+# GET only -- see CLAUDE.md hard rule #2.
+#
+# Usage: scripts/fetch-notifications ["$etag"]
+#   $1 (optional) -- a previously-seen ETag header value (with or without
+#   surrounding quotes, whatever `gh api -i` printed). When non-empty, sent
+#   back as `If-None-Match` so an unchanged inbox costs nothing against the
+#   rate-limit budget (exchange/04-github-data.md #2, live-verified: a 304
+#   response left X-Ratelimit-Remaining unchanged).
+#
+# The ETag is the only remote-derived/caller-supplied value this script
+# touches, and it is passed as a single quoted argv element ("$1") into a
+# `-H` argument -- never interpolated into a shell string. See
+# exchange/06-design.md's security invariants and CLAUDE.md hard rule #3.
+#
+# stdout: full `gh api -i` output (status line + headers + blank line +
+# JSON body). On a real "not modified" response the body is empty and `gh`
+# exits non-zero with "gh: HTTP 304" on stderr -- callers must treat that
+# specific shape as "no change," not an error (verified live 2026-08-27,
+# documented in exchange/07-s1-scaffold.md).
+# stderr: passthrough from `gh`. Exit code: gh's exit code, unchanged.
+set -euo pipefail
+
+etag="${1:-}"
+
+args=(api -i notifications)
+if [[ -n "$etag" ]]; then
+  args+=(-H "If-None-Match: $etag")
+fi
+
+exec gh "${args[@]}"

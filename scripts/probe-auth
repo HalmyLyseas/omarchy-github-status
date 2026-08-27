@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# scripts/probe-auth -- cheap, read-only check that `gh` exists on PATH and
+# is authenticated, without ever touching the credential itself and without
+# risking a prompt.
+#
+# Deliberately does NOT call `gh auth status` -- exchange/04-github-data.md
+# notes it can prompt/behave inconsistently in some states; `gh api user` is
+# a clean, unambiguous, single read-only REST GET (CLAUDE.md hard rule #1/#2:
+# never touch `gh auth` state, GitHub access is read-only GET/graphql only).
+#
+# On success, prints the authenticated login to stdout (not a secret --
+# GitHub usernames are public) and exits 0.
+#
+# Exit codes (stable, documented for Service.qml/Model.js's classifyFailure
+# to consume without re-parsing stderr text when it doesn't have to):
+#   0  ok               -- authenticated; login printed on stdout
+#   3  no-gh             -- `gh` is not on PATH
+#   4  unauthenticated   -- `gh` ran but the API call reports bad/missing
+#                           credentials (HTTP 401 / "Bad credentials")
+#   5  offline/other     -- any other failure (network unreachable, rate
+#                           limited, transient error, etc.) -- callers
+#                           should still run classifyFailure on the captured
+#                           stderr text for the fine-grained state, this
+#                           exit code is only a coarse "not exit 0/3/4" bucket
+set -euo pipefail
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "probe-auth: gh not found on PATH" >&2
+  exit 3
+fi
+
+if output="$(gh api user --jq .login 2>&1)"; then
+  echo "$output"
+  exit 0
+fi
+
+if printf '%s' "$output" | grep -qiE 'HTTP 401|Bad credentials'; then
+  echo "$output" >&2
+  exit 4
+fi
+
+echo "$output" >&2
+exit 5

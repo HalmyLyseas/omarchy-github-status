@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# scripts/fetch-dashboard -- one read-only GraphQL call that covers the
+# viewer's own open PRs (title/CI rollup/review decision), PRs waiting on
+# the viewer's review, and per-repo activity (latest commit, open issue/PR
+# counts, latest release) for every owned repo.
+#
+# GET-equivalent only: this is a GraphQL `query`, never a `mutation` -- see
+# CLAUDE.md hard rule #2 (the plugin never mutates GitHub state).
+#
+# The query text below is byte-identical to the one verified live against
+# the real API in exchange/04-github-data.md #6 (~2s wall time, ~1 graphql
+# point per call). Do not edit the query without re-verifying against a real
+# `gh api graphql` call and updating that doc.
+#
+# NOTE (deviation from exchange/06-design.md's literal suggestion of
+# `-f query=@-`): `gh api`'s `@<path>`/`@-` file/stdin-reading syntax is only
+# documented and only actually works for the typed `-F/--field` flag, not
+# `-f/--raw-field` -- verified live 2026-08-27, `-f query=@-` sends the
+# literal 2-byte string "@-" as the query and GraphQL rejects it
+# ("Expected one of SCHEMA, ... actual: DIR_SIGN (\"@\")"). `-F query=@-`
+# works correctly. See exchange/07-s1-scaffold.md.
+#
+# Invocation: no arguments. Runs via `bash -lc` from QML (see
+# exchange/03-shell-api.md #12 trap 11) so PATH is resolved the same way the
+# compositor session's login shell resolves it -- `gh` may live under a
+# user-managed tool-version-manager path (e.g. mise) that isn't on a bare
+# Quickshell-spawned process's PATH.
+#
+# stdout: raw `gh` JSON response (the whole GraphQL envelope, including a
+# top-level "errors" key on partial failure -- callers must check for that).
+# stderr: passthrough from `gh`. Exit code: gh's exit code, unchanged.
+set -euo pipefail
+
+exec gh api graphql -F query=@- <<'GRAPHQL'
+query {
+  viewer {
+    login
+    openPRs: pullRequests(states: OPEN, first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        title url number updatedAt isDraft reviewDecision
+        repository { nameWithOwner }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      }
+    }
+    repositories(first: 20, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) {
+      totalCount
+      nodes {
+        name pushedAt isPrivate isArchived isFork
+        openIssues: issues(states: OPEN) { totalCount }
+        openPRCount: pullRequests(states: OPEN) { totalCount }
+        latestRelease { tagName name publishedAt url }
+        defaultBranchRef {
+          target {
+            ... on Commit { oid messageHeadline committedDate statusCheckRollup { state } }
+          }
+        }
+      }
+    }
+  }
+  reviewRequests: search(query: "is:open is:pr review-requested:@me", type: ISSUE, first: 10) {
+    nodes {
+      ... on PullRequest { title url number updatedAt repository { nameWithOwner } }
+    }
+  }
+}
+GRAPHQL
