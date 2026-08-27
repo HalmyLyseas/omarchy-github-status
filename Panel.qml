@@ -25,6 +25,46 @@
 // "synced" is now sourced per-section (root.notifSynced for Inbox,
 // root.dashboardSynced for the other four) instead of one blended
 // root.synced -- see those properties' own header comment below.
+//
+// v1.2 delta (exchange/26-feedback2-delta-spec.md, S14 side, G1/G2/G3/G4):
+//   - G1: a TextField search row sits directly under the hero
+//     (`searchRow`/`searchField`). `root.searchQuery` is ephemeral (reset
+//     every time the panel opens, see onOpenedChanged) and live-filters
+//     every section's rendered rows through Model.matchesQuery (guarded --
+//     see `itemMatchesQuery`/`filterList`). Focus model: the field is NOT
+//     auto-focused on open (a click engages it, exactly like the
+//     wifi/network panel's inline passphrase prompt) -- see `searchField`'s
+//     own comment for the full rationale. While it holds focus,
+//     PanelKeyCatcher is `blocked` so typing (including vim letters
+//     j/k/h/l/x, which the key catcher would otherwise steal as
+//     scroll/delete keys -- "Nujabes" itself contains a "j") reaches the
+//     field untouched. Esc: first press clears a non-empty query, second
+//     press (query already empty) closes the panel, both handled locally by
+//     the field's own Keys.onEscapePressed -- no change to PanelKeyCatcher
+//     itself needed. A section's count pill during an active search always
+//     shows the FILTERED (rendered) length; "every section shows zero
+//     matches" deliberately gets no special full-panel message -- it just
+//     reads as five zero-pill headers, the same presentation an
+//     empty-and-synced section already had pre-G1 (see `filterList`).
+//   - G2: PrRow/ReviewRequestRow/IssueRow (not NotificationRow -- the
+//     contract only adds lastCommenter/lastCommentAt to
+//     openPRs/reviewRequests/myIssues) each gained a SafeToolTip via
+//     `commentTooltip(item)`, shown only when item.lastCommenter is
+//     non-empty.
+//   - G3: each section's Repeater is now wrapped in an inner Column gated
+//     on a new per-section `xCollapsed` property (session-only -- reset on
+//     every panel open, same as searchQuery) so Column's positioner
+//     excludes it from layout entirely while folded (no stray gap).
+//     SectionHeader itself owns the click/hover surface and chevron; see
+//     its own header comment for the hit-area-separation geometry.
+//   - G4: the My open issues header gained a Focus/All ButtonGroup in its
+//     `extra` slot, byte-for-byte the same idiom as the Repo activity
+//     header's F1 sort toggle, wired to svc.issuesFilter/setIssuesFilter.
+//     svc.myIssues is already the post-filter list (Service.qml's job, same
+//     ownership split as repoSort/repos) -- this file does not re-filter by
+//     `subscribed` itself, only by search on top of whatever svc.myIssues
+//     already returned.
+//
 // This file codes only against the Service public API contract -- the v1
 // surface frozen in 06-design.md, plus the v1.1 additions specified in
 // 19-feedback-delta-spec.md (S8 owns landing them in Service.qml/Model.js).
@@ -85,9 +125,56 @@ Panel {
     onTriggered: root.nowMs = Date.now()
   }
 
+  // G1: query text typed into `searchField`. Ephemeral by design (spec:
+  // "resets when panel closes") -- reset below, on open rather than on
+  // close, so a panel instance that stays alive in memory between
+  // open/close cycles (the norm for this kit's Panel/KeyboardPanel) never
+  // shows a stale query from a previous session for even one frame.
+  property string searchQuery: ""
+  readonly property bool searchActive: root.searchQuery.trim() !== ""
+
+  // G3: per-section fold state, session-only (spec: "NOT persisted; resets
+  // on panel reload") -- same reset-on-open treatment as searchQuery, same
+  // reasoning.
+  property bool inboxCollapsed: false
+  property bool reviewRequestsCollapsed: false
+  property bool openPRsCollapsed: false
+  property bool myIssuesCollapsed: false
+  property bool repoActivityCollapsed: false
+
   onOpenedChanged: if (opened) {
     root.nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
+    root.searchQuery = ""
+    if (searchField) searchField.text = ""
+    root.inboxCollapsed = false
+    root.reviewRequestsCollapsed = false
+    root.openPRsCollapsed = false
+    root.myIssuesCollapsed = false
+    root.repoActivityCollapsed = false
+  }
+
+  // G1: Model.matchesQuery(item, query) is the data-layer's contract
+  // (exchange/26-feedback2-delta-spec.md); guarded exactly like every other
+  // cross-owner Model.* read in this file (e.g. Model.repoPill below) so a
+  // moment where Model.js hasn't landed the function yet degrades to "show
+  // everything unfiltered", never a crash.
+  function itemMatchesQuery(item) {
+    if (!root.searchActive) return true
+    return (typeof Model.matchesQuery === "function") ? Model.matchesQuery(item, root.searchQuery) : true
+  }
+
+  // Pure client-side narrowing of an already-fetched list -- never a new
+  // remote read. Returns the SAME array reference when no query is active
+  // (the common case) so this costs nothing extra when the user isn't
+  // searching.
+  function filterList(list) {
+    if (!root.searchActive) return list
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      if (root.itemMatchesQuery(list[i])) out.push(list[i])
+    }
+    return out
   }
 
   // ---------------------------------------------------------------- data
@@ -109,8 +196,20 @@ Panel {
   }
   readonly property var reviewRequests: svc && svc.reviewRequests ? svc.reviewRequests : []
   readonly property var openPRs: svc && svc.openPRs ? svc.openPRs : []
+  // G4: svc.myIssues is already post-Focus/All-filter (Service.qml's job,
+  // same ownership split as repos/repoSort) -- this is the shown set before
+  // G1 search narrows it further below.
   readonly property var myIssues: svc && svc.myIssues ? svc.myIssues : []
   readonly property var repos: svc && svc.repos ? svc.repos : []
+
+  // G1: the rendered (search-filtered) list each Repeater below actually
+  // binds to. Identical to the un-filtered list above when no query is
+  // active.
+  readonly property var filteredNotifications: root.filterList(root.unreadNotifications)
+  readonly property var filteredReviewRequests: root.filterList(root.reviewRequests)
+  readonly property var filteredOpenPRs: root.filterList(root.openPRs)
+  readonly property var filteredMyIssues: root.filterList(root.myIssues)
+  readonly property var filteredRepos: root.filterList(root.repos)
 
   // "…" pill state (F4/SectionHeader) -- per-source, NOT the blended
   // svc.lastSyncMs (exchange/23-s11-delta-review.md F1): both pollers fire
@@ -129,6 +228,15 @@ Panel {
 
   function setRepoSort(mode) {
     if (svc && typeof svc.setRepoSort === "function") svc.setRepoSort(mode)
+  }
+
+  // G4: same mirror-property + setter shape as repoSort/setRepoSort above,
+  // against the Service.qml contract in exchange/26-feedback2-delta-spec.md
+  // (issuesFilter "focus"|"all" default "focus", setIssuesFilter(mode)).
+  readonly property string issuesFilter: svc && svc.issuesFilter ? String(svc.issuesFilter) : "focus"
+
+  function setIssuesFilter(mode) {
+    if (svc && typeof svc.setIssuesFilter === "function") svc.setIssuesFilter(mode)
   }
 
   // "owner/repo" -> "repo". Own-vs-external marking (F6) moves the owner out
@@ -230,6 +338,24 @@ Panel {
     return r.charAt(0).toUpperCase() + r.slice(1).replace(/_/g, " ")
   }
 
+  // ------------------------------------------------------------ G2 tooltip
+  //
+  // "last comment: <login> · <relative age>" -- item.lastCommenter/
+  // lastCommentAt are the exchange/26-feedback2-delta-spec.md contract
+  // fields on openPRs/reviewRequests/myIssues rows (not present on
+  // notifications or repos). "" whenever lastCommenter is empty/missing --
+  // the caller (each row's SafeToolTip) treats "" as "no tooltip at all",
+  // per spec ("omit the line entirely when \"\""). Defensive on a
+  // not-yet-landed field the same way every other cross-owner read in this
+  // file is: `item.lastCommenter` on an object that doesn't have the field
+  // yet is simply `undefined`, which the falsy check below already treats
+  // as "no tooltip".
+  function commentTooltip(item) {
+    if (!item || !item.lastCommenter) return ""
+    var age = Model.relativeTime(item.lastCommentAt, root.nowMs)
+    return "last comment: " + item.lastCommenter + (age ? " · " + age : "")
+  }
+
   // ------------------------------------------------------------------ UI
 
   KeyboardPanel {
@@ -245,6 +371,13 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // G1: while the search field holds focus, it owns every key --
+      // PanelKeyCatcher's own header comment prescribes exactly this
+      // `blocked: editor.activeFocus` shape (the wifi/network panel's
+      // passphrase-prompt precedent uses the identical idiom), so vim
+      // letters typed into a query (j/k/h/l/x -- "Nujabes" itself has a
+      // "j") never get stolen as scroll/delete keys.
+      blocked: !!searchField && searchField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onMoveRequested: function(dx, dy) {
@@ -297,6 +430,108 @@ Panel {
             }
           }
 
+          // -------------------------------------------------- search (G1)
+          //
+          // Focus model decision: the field is NOT auto-focused when the
+          // panel opens. KeyboardPanel already force-focuses `keyCatcher`
+          // itself on every open (its own `focusTarget` mechanism, via
+          // Qt.callLater -- see KeyboardPanel.qml), and racing a second
+          // Qt.callLater(searchField.forceActiveFocus) against that from
+          // here would depend on undocumented callLater ordering between
+          // two independent onOpenChanged handlers (root's and
+          // KeyboardPanel's own). Rather than fight the kit's own focus
+          // management, this follows the closest first-party precedent
+          // for an inline text editor living inside a KeyboardPanel: the
+          // network plugin's wifi passphrase prompt (only ever focused by
+          // an explicit user action -- clicking a row -- never on panel
+          // open). Landing here: the panel opens exactly like every other
+          // panel (keyCatcher owns focus, Tab/Esc/j-k-scroll all work
+          // immediately); a single click into this field is what engages
+          // search, at which point PanelKeyCatcher yields via `blocked`
+          // above. image-picker's `filterable` mode was the other
+          // candidate idiom (type-to-filter with no visible focused
+          // widget, via its own dedicated Keys.onPressed) but it depends
+          // on that panel never using j/k/h/l for anything else -- this
+          // panel already binds j/k (and, structurally, h/l) to scroll via
+          // PanelKeyCatcher, so routing raw keystrokes into the query
+          // through the same generic textKey channel would silently eat
+          // any query letter that collides with a vim key ("Nujabes" has a
+          // "j") before it ever reached the filter. A real, focusable
+          // TextField sidesteps that collision entirely.
+          Item {
+            id: searchRow
+            width: parent.width
+            height: searchField.implicitHeight
+
+            TextField {
+              id: searchField
+              anchors.left: parent.left
+              anchors.right: clearGlyph.visible ? clearGlyph.left : parent.right
+              anchors.rightMargin: clearGlyph.visible ? Style.space(6) : 0
+              anchors.verticalCenter: parent.verticalCenter
+              placeholderText: "Search…"
+              // Mirrors Model.matchesQuery's own ~100-char query cap
+              // (exchange/26-feedback2-delta-spec.md) so a pathologically
+              // long paste never even reaches the filter as a long string
+              // in the first place.
+              maximumLength: 100
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              foreground: root.foreground
+
+              // Field owns `text`; root.searchQuery just mirrors it. Every
+              // place that clears the query from OUTSIDE the field (the
+              // ✕ glyph, Esc below, panel close) sets `searchField.text`
+              // imperatively too, rather than relying on a `text: ...`
+              // binding that QML would silently drop the first time the
+              // user types (a real TextInput/TextField gotcha -- typing
+              // reassigns `text` imperatively, which permanently breaks a
+              // declarative `text: root.searchQuery` binding).
+              onTextChanged: root.searchQuery = text
+
+              // Esc: clear-then-close, both steps handled locally so
+              // PanelKeyCatcher (blocked while this field has focus) never
+              // has to know about search state at all.
+              Keys.onEscapePressed: function(event) {
+                if (root.searchQuery !== "") {
+                  root.searchQuery = ""
+                  searchField.text = ""
+                } else {
+                  root.close()
+                }
+                event.accepted = true
+              }
+            }
+
+            // Clear affordance for mouse users (spec: "Esc clears search
+            // first, second Esc closes panel -- if feasible ... otherwise
+            // an ✕ button"); kept alongside the Esc handling above rather
+            // than instead of it, since both are cheap and serve different
+            // input styles.
+            Text {
+              id: clearGlyph
+              visible: root.searchQuery !== ""
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: "✕"
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+
+              MouseArea {
+                anchors.fill: parent
+                anchors.margins: -Style.space(6)
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  root.searchQuery = ""
+                  searchField.text = ""
+                  searchField.forceActiveFocus()
+                }
+              }
+            }
+          }
+
           BorderSurface {
             id: statusHintBox
             visible: root.statusHint !== ""
@@ -331,23 +566,33 @@ Panel {
 
             SectionHeader {
               text: "INBOX"
-              // Inbox pill is the service's own unread count, not the
-              // rendered list length -- the two should agree, but the
-              // spec calls out unreadCount specifically as the source
-              // (exchange/19-feedback-delta-spec.md F4).
-              count: svc ? (Number(svc.unreadCount) || 0) : 0
+              // Inbox pill: the service's own unread count when not
+              // searching (F4's original source -- the two should agree,
+              // but unreadCount is the spec-called-out authority), the
+              // filtered rendered length while a G1 query is active (so
+              // the pill reflects what's actually on screen, matching
+              // every other section).
+              count: root.searchActive ? root.filteredNotifications.length : (svc ? (Number(svc.unreadCount) || 0) : 0)
               synced: root.notifSynced
+              collapsed: root.inboxCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
+              onToggled: root.inboxCollapsed = !root.inboxCollapsed
             }
 
-            Repeater {
-              model: root.unreadNotifications
+            Column {
+              width: parent.width
+              spacing: Style.space(4)
+              visible: !root.inboxCollapsed
 
-              NotificationRow {
-                required property var modelData
-                width: parent ? parent.width : 0
-                item: modelData
+              Repeater {
+                model: root.filteredNotifications
+
+                NotificationRow {
+                  required property var modelData
+                  width: parent ? parent.width : 0
+                  item: modelData
+                }
               }
             }
           }
@@ -361,19 +606,27 @@ Panel {
 
             SectionHeader {
               text: "REVIEW REQUESTS"
-              count: root.reviewRequests.length
+              count: root.filteredReviewRequests.length
               synced: root.dashboardSynced
+              collapsed: root.reviewRequestsCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
+              onToggled: root.reviewRequestsCollapsed = !root.reviewRequestsCollapsed
             }
 
-            Repeater {
-              model: root.reviewRequests
+            Column {
+              width: parent.width
+              spacing: Style.space(4)
+              visible: !root.reviewRequestsCollapsed
 
-              ReviewRequestRow {
-                required property var modelData
-                width: parent ? parent.width : 0
-                item: modelData
+              Repeater {
+                model: root.filteredReviewRequests
+
+                ReviewRequestRow {
+                  required property var modelData
+                  width: parent ? parent.width : 0
+                  item: modelData
+                }
               }
             }
           }
@@ -387,19 +640,27 @@ Panel {
 
             SectionHeader {
               text: "MY OPEN PULL REQUESTS"
-              count: root.openPRs.length
+              count: root.filteredOpenPRs.length
               synced: root.dashboardSynced
+              collapsed: root.openPRsCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
+              onToggled: root.openPRsCollapsed = !root.openPRsCollapsed
             }
 
-            Repeater {
-              model: root.openPRs
+            Column {
+              width: parent.width
+              spacing: Style.space(4)
+              visible: !root.openPRsCollapsed
 
-              PrRow {
-                required property var modelData
-                width: parent ? parent.width : 0
-                item: modelData
+              Repeater {
+                model: root.filteredOpenPRs
+
+                PrRow {
+                  required property var modelData
+                  width: parent ? parent.width : 0
+                  item: modelData
+                }
               }
             }
           }
@@ -409,26 +670,51 @@ Panel {
           // ------------------------------------------------- open issues
           // F3: issues the user themselves opened, any repo -- distinct from
           // review requests (PRs waiting on the user) and open PRs (the
-          // user's own PR backlog).
+          // user's own PR backlog). G4: Focus/All toggle, same idiom as the
+          // Repo activity header's F1 sort toggle below.
           Column {
             width: parent.width
             spacing: Style.space(4)
 
             SectionHeader {
               text: "MY OPEN ISSUES"
-              count: root.myIssues.length
+              count: root.filteredMyIssues.length
               synced: root.dashboardSynced
+              collapsed: root.myIssuesCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
+              onToggled: root.myIssuesCollapsed = !root.myIssuesCollapsed
+              extra: Component {
+                ButtonGroup {
+                  anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+                  options: [
+                    { value: "focus", label: "Focus" },
+                    { value: "all", label: "All" }
+                  ]
+                  value: root.issuesFilter
+                  foreground: root.foreground
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  focusable: false
+                  onChanged: function(v) { root.setIssuesFilter(v) }
+                }
+              }
             }
 
-            Repeater {
-              model: root.myIssues
+            Column {
+              width: parent.width
+              spacing: Style.space(4)
+              visible: !root.myIssuesCollapsed
 
-              IssueRow {
-                required property var modelData
-                width: parent ? parent.width : 0
-                item: modelData
+              Repeater {
+                model: root.filteredMyIssues
+
+                IssueRow {
+                  required property var modelData
+                  width: parent ? parent.width : 0
+                  item: modelData
+                }
               }
             }
           }
@@ -442,15 +728,20 @@ Panel {
 
             SectionHeader {
               text: "REPO ACTIVITY"
-              count: root.repos.length
+              count: root.filteredRepos.length
               synced: root.dashboardSynced
+              collapsed: root.repoActivityCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
+              onToggled: root.repoActivityCollapsed = !root.repoActivityCollapsed
               // F1: compact recent/stars sort toggle, left of the count
               // pill. ButtonGroup's value/changed contract maps 1:1 onto
               // svc.repoSort/setRepoSort -- setRepoSort itself validates the
               // mode (Service.qml's job), so this click is a plain pass-
-              // through.
+              // through. Also doubles as G3's hit-area-separation proof:
+              // this toggle lives in SectionHeader's `extra` slot, strictly
+              // right of the fold MouseArea's geometric boundary -- see
+              // SectionHeader.qml's own header comment.
               extra: Component {
                 ButtonGroup {
                   anchors.verticalCenter: parent ? parent.verticalCenter : undefined
@@ -469,13 +760,19 @@ Panel {
               }
             }
 
-            Repeater {
-              model: root.repos
+            Column {
+              width: parent.width
+              spacing: Style.space(4)
+              visible: !root.repoActivityCollapsed
 
-              RepoRow {
-                required property var modelData
-                width: parent ? parent.width : 0
-                item: modelData
+              Repeater {
+                model: root.filteredRepos
+
+                RepoRow {
+                  required property var modelData
+                  width: parent ? parent.width : 0
+                  item: modelData
+                }
               }
             }
           }
@@ -535,6 +832,13 @@ Panel {
   component SafeToolTip: ToolTip {
     id: tip
     property string fontFamily: Style.font.family
+    // Width cap (G2 audit: "PlainText+elide+width-capped" on every new
+    // sink) -- applies retroactively to the pre-existing repo-row tooltip
+    // too, since both share this one component. A commit headline or a
+    // "last comment: <login> · <age>" line could otherwise stretch the
+    // popup arbitrarily wide against a pathological remote string; elide
+    // alone bounds render cost but not layout width.
+    property real maxWidth: Style.space(320)
 
     delay: 400
     padding: 0
@@ -549,6 +853,7 @@ Panel {
       text: tip.text
       textFormat: Text.PlainText
       elide: Text.ElideRight
+      width: Math.min(implicitWidth, tip.maxWidth)
       color: Color.tooltip.text
       font.family: tip.fontFamily
       font.pixelSize: Style.font.bodySmall
@@ -739,6 +1044,14 @@ Panel {
       cursorShape: Qt.PointingHandCursor
       onClicked: root.openItem(rrRow.item ? rrRow.item.webUrl : "")
     }
+
+    // G2: "last comment: <login> · <age>", omitted entirely when there is
+    // no lastCommenter.
+    SafeToolTip {
+      visible: rrArea.containsMouse && root.commentTooltip(rrRow.item) !== ""
+      text: root.commentTooltip(rrRow.item)
+      fontFamily: root.fontFamily
+    }
   }
 
   // One open PR: title (+ draft marker, + right-aligned relative age),
@@ -846,6 +1159,14 @@ Panel {
       cursorShape: Qt.PointingHandCursor
       onClicked: root.openItem(prRow.item ? prRow.item.webUrl : "")
     }
+
+    // G2: "last comment: <login> · <age>", omitted entirely when there is
+    // no lastCommenter.
+    SafeToolTip {
+      visible: prArea.containsMouse && root.commentTooltip(prRow.item) !== ""
+      text: root.commentTooltip(prRow.item)
+      fontFamily: root.fontFamily
+    }
   }
 
   // One issue the user themselves opened (F3): title (+ right-aligned
@@ -936,6 +1257,14 @@ Panel {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onClicked: root.openItem(issueRow.item ? issueRow.item.webUrl : "")
+    }
+
+    // G2: "last comment: <login> · <age>", omitted entirely when there is
+    // no lastCommenter.
+    SafeToolTip {
+      visible: issueArea.containsMouse && root.commentTooltip(issueRow.item) !== ""
+      text: root.commentTooltip(issueRow.item)
+      fontFamily: root.fontFamily
     }
   }
 
