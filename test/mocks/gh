@@ -67,9 +67,12 @@ fi
 
 # --- gh api graphql -F query=@- ---------------------------------------------
 if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
-  # Consume stdin (the query text) so the caller's heredoc pipe doesn't hang,
-  # but the mock doesn't need its contents to serve a canned fixture.
-  cat >/dev/null
+  # Consume stdin (the query text) so the caller's heredoc pipe doesn't hang.
+  # Normally the mock doesn't need its contents to serve a canned fixture, but
+  # when MOCK_GH_GRAPHQL_QUERY_FILE is set (test-only), capture the query text
+  # there instead of discarding it, so a caller can assert on what was
+  # actually sent -- not just the calling script's source text.
+  cat > "${MOCK_GH_GRAPHQL_QUERY_FILE:-/dev/null}"
   cat "$FIXTURES/mega-graphql.json"
   exit 0
 fi

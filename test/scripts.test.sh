@@ -41,6 +41,15 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local desc="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    ok "$desc"
+  else
+    not_ok "$desc (expected NOT to find [$needle])"
+  fi
+}
+
 # ------------------------------------------------------------- fetch-dashboard
 
 out="$(PATH="$MOCKS:$PATH" "$PLUGIN_DIR/scripts/fetch-dashboard")"
@@ -48,6 +57,22 @@ code=$?
 assert_eq "fetch-dashboard exits 0 against mock" "0" "$code"
 expected_dashboard="$(cat "$FIXTURES/mega-graphql.json")"
 assert_eq "fetch-dashboard stdout matches mega-graphql fixture" "$expected_dashboard" "$out"
+
+# Assert on the query actually sent to `gh`, not just the script's source
+# text: test/mocks/gh's graphql branch discards stdin by default, so a
+# regression in the repositories() window (e.g. `first: 30` -> `first: 20`)
+# would pass every check above -- the mock always serves the same fixture
+# regardless of what query it received. MOCK_GH_GRAPHQL_QUERY_FILE makes the
+# mock capture stdin to a file instead so we can inspect it here.
+query_capture_dir="$(mktemp -d)"
+trap 'rm -rf "$query_capture_dir"' EXIT
+query_capture_file="$query_capture_dir/graphql-query.txt"
+MOCK_GH_GRAPHQL_QUERY_FILE="$query_capture_file" PATH="$MOCKS:$PATH" "$PLUGIN_DIR/scripts/fetch-dashboard" >/dev/null
+code=$?
+assert_eq "fetch-dashboard (query capture) exits 0" "0" "$code"
+sent_query="$(cat "$query_capture_file")"
+assert_contains "fetch-dashboard sends repositories(first: 30, ...) as the actual query" "$sent_query" 'repositories(first: 30, ownerAffiliations: OWNER'
+assert_not_contains "fetch-dashboard query contains no mutation token" "$sent_query" "mutation"
 
 # --------------------------------------------------------- fetch-notifications
 
