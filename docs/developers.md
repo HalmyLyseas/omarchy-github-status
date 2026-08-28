@@ -203,32 +203,46 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   inside the card at every boundary tested (a section's last row, the
   panel's true last row, scrolled or not) — see `Panel.qml`'s own
   `SafeToolTip` header comment and `exchange/36-s20-release.md` for the
-  full repro/diagnosis and proof. It does **not** eliminate every case of a
-  tooltip overlapping adjacent row text: a row comfortably in the interior
-  of a long section (not near any header or viewport edge) still has its
-  tooltip land partly on the *next* row's text when opened below, because
-  the tooltip (~35px) is taller than the gap on *both* sides (~4px) —
-  flipping to open above there would just relocate the same defect onto
-  the *previous* row (or, for a section's first row, back onto the header —
-  reintroducing the original bug). exchange/36 documents this as a known,
-  accepted residual limitation of a two-way flip, not something S20 missed.
-  Two implementation traps worth knowing if this code is touched again:
-  (1) `Panel.qml`'s components aren't `pragma ComponentBehavior: Bound`
-  (the file's own qmllint-baseline note below); reading a Repeater
-  delegate's own geometry via the bare `parent` property from inside a JS
-  *function block* binding (as opposed to a plain expression) resolved to
-  the same single Item's geometry across every delegate instance — pass an
-  explicit `property Item rowItem` set declaratively at each call site
-  instead, never `parent`, inside this kind of binding. (2) `mapToItem`/
-  `mapToGlobal` are plain synchronous coordinate-transform calls, not
-  bindable properties — a binding that only calls them goes stale on
-  scroll and never re-fires unless it also directly reads a real bindable
-  property that changes with scroll (`Flickable.contentY`). The *other*
-  half of the original bug report ("hovering one row does nothing") turned
-  out not to be a bug at all: that row's real GitHub issue genuinely has
-  zero comments (`comments(last: 1)` correctly returns no nodes), so an
-  empty tooltip is the spec-correct result, not a wiring failure — verified
-  against live-fetched data before touching any code.
+  full repro/diagnosis and proof. A section's first row never flips above
+  even when it's the one short on room below: `firstInSection` (set by
+  each Repeater delegate from its own `index === 0`) forces "below" for
+  that row unconditionally, because "above" for a first row always means
+  the SECTION HEADER, not another row — this was **not** caught by the
+  synthetic probe harness alone; it was found live, during S20's own
+  deploy-time verification (hovering a section's first row after enough
+  content above it pushed it near the panel's height cap flipped the
+  tooltip onto the header, reproducing the exact defect the v1 H2 fix
+  eliminated), and only then reproduced synthetically and fixed. It does
+  **not** eliminate every case of a tooltip overlapping adjacent row text:
+  a row comfortably in the interior of a long section (not near any header
+  or viewport edge) still has its tooltip land partly on the *next* row's
+  text when opened below, because the tooltip (~35px) is taller than the
+  gap on *both* sides (~4px) — flipping to open above there would just
+  relocate the same defect onto the *previous* row. exchange/36 documents
+  this as a known, accepted residual limitation of a two-way flip, not
+  something S20 missed. Three implementation traps worth knowing if this
+  code is touched again: (1) `Panel.qml`'s components aren't `pragma
+  ComponentBehavior: Bound` (the file's own qmllint-baseline note below);
+  reading a Repeater delegate's own geometry via the bare `parent` property
+  from inside a JS *function block* binding (as opposed to a plain
+  expression) resolved to the same single Item's geometry across every
+  delegate instance — pass an explicit `property Item rowItem` set
+  declaratively at each call site instead, never `parent`, inside this
+  kind of binding. (2) `mapToItem`/`mapToGlobal` are plain synchronous
+  coordinate-transform calls, not bindable properties — a binding that
+  only calls them goes stale on scroll and never re-fires unless it also
+  directly reads a real bindable property that changes with scroll
+  (`Flickable.contentY`). (3) A synthetic probe harness, however
+  thorough, encodes the fixture shapes its author thought to try — the
+  first-row-header-collision case above only surfaced once the fix was
+  deployed and hovered on the real panel with real (larger) data volume;
+  treat "harness-clean" as necessary, not sufficient, for a live redeploy
+  verification pass. The *other* half of the original bug report ("hovering
+  one row does nothing") turned out not to be a bug at all: that row's real
+  GitHub issue genuinely has zero comments (`comments(last: 1)` correctly
+  returns no nodes), so an empty tooltip is the spec-correct result, not a
+  wiring failure — verified against live-fetched data before touching any
+  code.
 
 - **`viewer.issues(states: OPEN, ...)` with no `filterBy` is already
   authored-scoped — no `search author:@me` fallback needed.** v1.1's F3

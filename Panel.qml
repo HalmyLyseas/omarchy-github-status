@@ -642,8 +642,10 @@ Panel {
 
                 ReviewRequestRow {
                   required property var modelData
+                  required property int index
                   width: parent ? parent.width : 0
                   item: modelData
+                  firstInSection: index === 0
                 }
               }
             }
@@ -676,8 +678,10 @@ Panel {
 
                 PrRow {
                   required property var modelData
+                  required property int index
                   width: parent ? parent.width : 0
                   item: modelData
+                  firstInSection: index === 0
                 }
               }
             }
@@ -741,8 +745,10 @@ Panel {
 
                 IssueRow {
                   required property var modelData
+                  required property int index
                   width: parent ? parent.width : 0
                   item: modelData
+                  firstInSection: index === 0
                 }
               }
             }
@@ -783,8 +789,10 @@ Panel {
 
                 RepoRow {
                   required property var modelData
+                  required property int index
                   width: parent ? parent.width : 0
                   item: modelData
+                  firstInSection: index === 0
                 }
               }
             }
@@ -916,6 +924,15 @@ Panel {
     // plain per-instance declarative binding, not a JS-function `parent`
     // lookup) sidesteps it entirely -- confirmed correct per-row live.
     property Item rowItem: null
+    // S20 flip-to-fit input: true when `rowItem` is its section's first
+    // row (set by each call site from `<rowId>.firstInSection`, which the
+    // Repeater delegate sets from its own `index === 0`). "Above" for a
+    // first row always lands on the SECTION HEADER, not another row --
+    // live-reproduced during S20's own deploy-time verification (hovering
+    // a section's first row after scrolling flipped the tooltip onto the
+    // header, reintroducing the exact defect the v1 H2 fix eliminated).
+    // See the y binding below.
+    property bool firstInSection: false
     property real gap: Style.space(3)
 
     delay: 400
@@ -948,12 +965,16 @@ Panel {
       var visibleBottom = vp.contentY + vp.height
       var spaceBelow = visibleBottom - contentSpaceBottom
       if (spaceBelow >= tip.implicitHeight + tip.gap) return below
-      var contentSpaceTop = row.mapToItem(vp.contentItem, 0, 0).y
-      var spaceAbove = contentSpaceTop - vp.contentY
-      if (spaceAbove >= tip.implicitHeight + tip.gap) return above
-      // Neither direction fully clears the viewport (a degenerate
-      // tiny-viewport/tall-tooltip case) -- below is the lesser evil and
-      // strictly no worse than the v1 fix it replaces.
+      // Not enough room below. Opening above is only safe when this is
+      // NOT a section's first row -- see `firstInSection`'s own comment.
+      if (!tip.firstInSection) {
+        var contentSpaceTop = row.mapToItem(vp.contentItem, 0, 0).y
+        var spaceAbove = contentSpaceTop - vp.contentY
+        if (spaceAbove >= tip.implicitHeight + tip.gap) return above
+      }
+      // Neither a safe "above" nor a fitting "below" -- below is the
+      // lesser evil (never re-collides with a header, matching the v1
+      // fix's own guarantee) and never worse than the fix it replaces.
       return below
     }
 
@@ -1075,6 +1096,13 @@ Panel {
   component ReviewRequestRow: Item {
     id: rrRow
     property var item: null
+    // S20 flip-to-fit input (exchange/35 F1/F2): true for this section's
+    // first row, set by the Repeater call site from its own `index`.
+    // SafeToolTip's y binding never opens above when this is true --
+    // "above" for a first row always means the SECTION HEADER, not
+    // another row, and landing there would reintroduce the original H2
+    // bug this whole fix exists to prevent.
+    property bool firstInSection: false
     implicitHeight: rrCol.implicitHeight + Style.space(10)
 
     Rectangle {
@@ -1167,6 +1195,7 @@ Panel {
       fontFamily: root.fontFamily
       viewport: panelFlick
       rowItem: rrRow
+      firstInSection: rrRow.firstInSection
     }
   }
 
@@ -1176,6 +1205,8 @@ Panel {
   component PrRow: Item {
     id: prRow
     property var item: null
+    // S20 flip-to-fit input -- see ReviewRequestRow's own comment above.
+    property bool firstInSection: false
     implicitHeight: Math.max(prCol.implicitHeight, prGlyph.implicitHeight) + Style.space(10)
 
     Rectangle {
@@ -1284,6 +1315,7 @@ Panel {
       fontFamily: root.fontFamily
       viewport: panelFlick
       rowItem: prRow
+      firstInSection: prRow.firstInSection
     }
   }
 
@@ -1293,6 +1325,8 @@ Panel {
   component IssueRow: Item {
     id: issueRow
     property var item: null
+    // S20 flip-to-fit input -- see ReviewRequestRow's own comment above.
+    property bool firstInSection: false
     implicitHeight: issueCol.implicitHeight + Style.space(10)
 
     Rectangle {
@@ -1385,6 +1419,7 @@ Panel {
       fontFamily: root.fontFamily
       viewport: panelFlick
       rowItem: issueRow
+      firstInSection: issueRow.firstInSection
     }
   }
 
@@ -1395,6 +1430,8 @@ Panel {
   component RepoRow: Item {
     id: repoRow
     property var item: null
+    // S20 flip-to-fit input -- see ReviewRequestRow's own comment above.
+    property bool firstInSection: false
     implicitHeight: repoCol.implicitHeight + Style.space(10)
 
     Rectangle {
@@ -1495,6 +1532,7 @@ Panel {
       fontFamily: root.fontFamily
       viewport: panelFlick
       rowItem: repoRow
+      firstInSection: repoRow.firstInSection
     }
   }
 }
