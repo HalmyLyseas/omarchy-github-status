@@ -725,12 +725,10 @@ Panel {
               fontFamily: root.fontFamily
               onToggled: root.myIssuesCollapsed = !root.myIssuesCollapsed
               // exchange/38-feedback4-delta-spec.md I1a/I1b: the chip's
-              // label now follows its own state instead of a fixed
+              // label follows its own state instead of a fixed
               // "Subscribed" -- active (issuesFilter === "focus") reads
-              // "subscribed", inactive reads "all". Lowercase is the
-              // interim casing per I1b (precedent: the removed F1
-              // repo-sort toggle's "recent"/"stars" was lowercase too;
-              // section headers themselves own the uppercase register).
+              // "SUBSCRIBED", inactive reads "ALL". Uppercase per the
+              // human's pick at the 38/39 review gate.
               // Text.PlainText doesn't apply here the way it does to
               // remote-data Text elements (see file-wide policy) -- both
               // strings are local literals, never user/network data, so
@@ -749,7 +747,7 @@ Panel {
               extra: Component {
                 Button {
                   anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-                  text: root.issuesFilter === "focus" ? "subscribed" : "all"
+                  text: root.issuesFilter === "focus" ? "SUBSCRIBED" : "ALL"
                   selected: root.issuesFilter === "focus"
                   bordered: true
                   foreground: root.foreground
