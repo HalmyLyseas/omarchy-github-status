@@ -99,6 +99,23 @@
 //     whether the pollers are already running.
 //   - F3: accepted as a note, not fixed -- see docs/developers.md's
 //     "Accepted risks".
+//
+// S18 delta pass (exchange/33-feedback3-delta-spec.md, H1/H3 -- H2 was a
+// Panel.qml-only fix, see that file's own header comment):
+//   - H3: `repoSort`/`setRepoSort()` and the read-time
+//     `Model.sortRepos(internal.repos, repoSort)` call are REMOVED --
+//     `repos` (below) is now a plain slice of `internal.repos` (itself
+//     always in raw query order, GraphQL PUSHED_AT desc) by `repoLimit`,
+//     no sort layer left. A `repoSort` key surviving in an existing user's
+//     shell.json entry (pre-1.3) is harmless: nothing here reads it
+//     anymore, and Model.mergedSettings's "current entry plus one changed
+//     key" merge shape (still used by setIssuesFilter) preserves whatever
+//     stale keys are already present rather than stripping them -- see
+//     docs/developers.md.
+//   - H1: `issuesFilter`/`setIssuesFilter()` themselves are UNCHANGED --
+//     H1 only reshaped Panel.qml's Focus/All ButtonGroup into a single
+//     "Subscribed" toggle chip; this file's contract and persistence
+//     shape are exactly what S13 shipped.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -157,21 +174,20 @@ Item {
   // Model.mapDashboard's null-vs-[] contract, keep-last-good on failure.
   // exchange/26-feedback2-delta-spec.md G4: filtered per `issuesFilter` at
   // READ time (same "raw at fetch time, derived at read time" split repos
-  // already uses for repoSort/repoLimit below) -- a live issuesFilter change
-  // re-filters instantly with no new fetch. internal.myIssues itself always
-  // holds the full, unfiltered last-good list.
+  // below uses for repoLimit) -- a live issuesFilter change re-filters
+  // instantly with no new fetch. internal.myIssues itself always holds the
+  // full, unfiltered last-good list.
   readonly property var myIssues: Model.filterIssues(internal.myIssues, root.issuesFilter)
   // G4: pre-filter count, so the UI can show "Focus (3) / All (9)"-style
   // affordances without needing internal.myIssues directly.
   readonly property int myIssuesAllCount: internal.myIssues.length
-  // F1: repos are sorted per `repoSort`, THEN sliced per repoLimit (a
-  // setting, min 3/max 30) -- single ownership of both the sort and the
-  // slice lives here, on top of Model.js's own fixed CAP_REPOS=30 -- see
-  // "Settings" below. internal.repos itself is always stored in the raw
-  // order the query/mapper produced it (activity order); re-sorting happens
-  // here, not at assignment time, so a live repoSort change re-orders
-  // immediately without needing a new fetch.
-  readonly property var repos: Model.sortRepos(internal.repos, root.repoSort).slice(0, root.repoLimit)
+  // exchange/33-feedback3-delta-spec.md H3: sliced by repoLimit (a setting,
+  // min 3/max 30) only -- the F1 sort layer (Model.sortRepos/repoSort) is
+  // removed; internal.repos is always stored in raw query order (GraphQL
+  // PUSHED_AT desc, scripts/fetch-dashboard's own ORDER BY), and repoLimit
+  // is applied here on top of Model.js's own fixed CAP_REPOS=30 -- see
+  // "Settings" below.
+  readonly property var repos: internal.repos.slice(0, root.repoLimit)
   readonly property bool hasAttention:
     internal.openPRs.some(function (p) { return p && p.ciState === "failure" })
     || internal.reviewRequests.length > 0
@@ -211,39 +227,19 @@ Item {
     Quickshell.execDetached(["xdg-open", url])
   }
 
-  // F1 (exchange/19-feedback-delta-spec.md): validates `mode` (anything
-  // other than exactly "stars" becomes "activity" -- same permissive-
-  // default-on-garbage-input shape as Model.sortRepos itself), then
-  // persists it via shell.updateEntryInline -- trap 10 (see
-  // Model.mergedSettings's own header comment): that host call REPLACES
-  // the whole settings entry with whatever keys it's handed, so this always
-  // builds the FULL next-state object (current settings entry + the one
-  // changed key) rather than a bare `{repoSort: mode}`, or every other
-  // persisted setting (dashboardIntervalSec, notificationsIntervalSec,
-  // repoLimit) would be silently dropped on the next repo-sort toggle.
-  // "Applies immediately": `root.repoSort` (below) is a live binding over
-  // `_settingsEntry`/`shellConfig`, so the moment updateEntryInline
-  // reassigns `shell.shellConfig`, `repoSort` (and therefore the sorted
-  // `repos` property above) re-evaluates on its own -- no separate internal
-  // state to keep in sync.
-  function setRepoSort(mode) {
-    var next = validRepoSort(mode)
-    if (!shell || typeof shell.updateEntryInline !== "function") {
-      log("setRepoSort: shell.updateEntryInline unavailable -- cannot persist")
-      return
-    }
-    shell.updateEntryInline("halmylyseas.github-status", Model.mergedSettings(root._settingsEntry, "repoSort", next))
-    log("repoSort set to " + next)
-  }
-
-  // G4 (exchange/26-feedback2-delta-spec.md): identical shape to
-  // setRepoSort() above -- validate, then persist via the same
-  // Model.mergedSettings full-next-state pattern (never a raw
-  // `{issuesFilter: mode}` write, which would drop every other persisted
-  // setting the same way a bare repoSort write would). "Applies
-  // immediately": `root.issuesFilter` below is a live binding over
-  // `_settingsEntry`, so `myIssues` (filtered at read time, above)
-  // re-evaluates the instant updateEntryInline reassigns shell.shellConfig.
+  // G4 (exchange/26-feedback2-delta-spec.md): validates `mode` (anything
+  // other than exactly "all" becomes "focus"), then persists it via
+  // shell.updateEntryInline -- trap 10 (see Model.mergedSettings's own
+  // header comment): that host call REPLACES the whole settings entry with
+  // whatever keys it's handed, so this always builds the FULL next-state
+  // object (current settings entry + the one changed key) rather than a
+  // bare `{issuesFilter: mode}`, or every other persisted setting
+  // (dashboardIntervalSec, notificationsIntervalSec, repoLimit) would be
+  // silently dropped on every toggle. "Applies immediately":
+  // `root.issuesFilter` below is a live binding over
+  // `_settingsEntry`/`shellConfig`, so `myIssues` (filtered at read time,
+  // above) re-evaluates the instant updateEntryInline reassigns
+  // shell.shellConfig -- no separate internal state to keep in sync.
   function setIssuesFilter(mode) {
     var next = validIssuesFilter(mode)
     if (!shell || typeof shell.updateEntryInline !== "function") {
@@ -277,16 +273,10 @@ Item {
     clampInt(settingInt(_settingsEntry, "notificationsIntervalSec", manifestDefault("notificationsIntervalSec", 60)), 60, 600)
   readonly property int repoLimit:
     clampInt(settingInt(_settingsEntry, "repoLimit", manifestDefault("repoLimit", 10)), 3, 30)
-  // F1: "activity" (default) or "stars" -- validRepoSort() is the single
-  // point that decides what counts as a legal value, so a hand-edited (or
-  // stale, pre-1.1) shell.json entry with a garbage/missing repoSort value
-  // falls back to "activity" rather than producing an unsorted/broken repos
-  // list.
-  readonly property string repoSort:
-    validRepoSort(settingStr(_settingsEntry, "repoSort", manifestDefault("repoSort", "activity")))
   // G4: "focus" (default) or "all" -- validIssuesFilter() is the single
-  // point that decides what counts as a legal value, same shape as
-  // repoSort/validRepoSort above.
+  // point that decides what counts as a legal value, so a hand-edited (or
+  // stale) shell.json entry with a garbage/missing issuesFilter value falls
+  // back to "focus" rather than crashing or showing an undefined mode.
   readonly property string issuesFilter:
     validIssuesFilter(settingStr(_settingsEntry, "issuesFilter", manifestDefault("issuesFilter", "focus")))
 
@@ -345,10 +335,6 @@ Item {
 
   function clampInt(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v))
-  }
-
-  function validRepoSort(mode) {
-    return mode === "stars" ? "stars" : "activity"
   }
 
   function validIssuesFilter(mode) {
@@ -974,7 +960,6 @@ Item {
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
       + " notificationsIntervalSec=" + root.notificationsIntervalSec
       + " repoLimit=" + root.repoLimit
-      + " repoSort=" + root.repoSort
       + " issuesFilter=" + root.issuesFilter + ")")
     startProbe()
   }

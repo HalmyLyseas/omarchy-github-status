@@ -22,7 +22,6 @@
       "dashboardIntervalSec": 180,
       "notificationsIntervalSec": 60,
       "repoLimit": 10,
-      "repoSort": "activity",
       "issuesFilter": "focus"
     },
     "schema": [
@@ -47,23 +46,16 @@
       {
         "key": "repoLimit",
         "type": "integer",
-        "label": "Repos shown in activity list",
+        "label": "Repos shown in repositories list",
         "min": 3,
         "max": 30,
         "step": 1,
         "defaultValue": 10
       },
       {
-        "key": "repoSort",
-        "type": "enum",
-        "label": "Repo sort",
-        "options": ["activity", "stars"],
-        "defaultValue": "activity"
-      },
-      {
         "key": "issuesFilter",
         "type": "enum",
-        "label": "Issues filter",
+        "label": "Subscribed only",
         "options": ["focus", "all"],
         "defaultValue": "focus"
       }

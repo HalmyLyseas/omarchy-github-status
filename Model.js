@@ -434,31 +434,14 @@ function repoPill(repo) {
   return ""
 }
 
-// F1: client-side sort over the already-fetched repos window (first: 20 in
-// the query -- fine at this scale, see docs/developers.md). Returns a NEW
-// array (never mutates the input) so a caller holding the previous array as
-// "last-good" data is unaffected. Unrecognized/missing mode falls back to
-// "activity" (pushedAt desc) -- the default and the query's own natural
-// order. "stars" mode ties-break on pushedAt desc too, so two zero-star (or
-// equal-star) repos still land in a stable, sensible order rather than
-// whatever order Array.sort's comparator happens to leave them in.
-function sortRepos(repos, mode) {
-  var arr = isArray(repos) ? repos.slice() : []
-  var m = mode === "stars" ? "stars" : "activity"
-  function pushedAtMs(r) {
-    var t = isObject(r) ? Date.parse(safeStr(r.pushedAt, "")) : NaN
-    return isNaN(t) ? 0 : t
-  }
-  if (m === "stars") {
-    arr.sort(function (a, b) {
-      var diff = safeNum(b && b.stars, 0) - safeNum(a && a.stars, 0)
-      return diff !== 0 ? diff : pushedAtMs(b) - pushedAtMs(a)
-    })
-  } else {
-    arr.sort(function (a, b) { return pushedAtMs(b) - pushedAtMs(a) })
-  }
-  return arr
-}
+// exchange/33-feedback3-delta-spec.md H3: the F1 client-side repo sort
+// (activity/stars toggle) is removed entirely -- repos render in fetch
+// order (GraphQL PUSHED_AT desc, scripts/fetch-dashboard's own query
+// order), sliced by repoLimit in Service.qml. `stars` (mapRepos below,
+// still sourced from `stargazerCount`) is unused now but left in the
+// mapped shape -- it's harmless dead data, not worth a wider-scope removal
+// across the GraphQL query/fetch script/fixtures for a field that costs
+// nothing to keep.
 
 // ------------------------------------------------------- search + filter (G1/G4)
 
@@ -494,9 +477,9 @@ function matchesQuery(item, query) {
 // subscribedFromViewerSubscription() does, rather than being silently
 // dropped by a stricter equality check); "all" is a pass-through copy.
 // Any mode other than exactly "all" (including missing/garbage) is treated
-// as "focus" -- same permissive-default-on-garbage-input shape as
-// sortRepos()'s own mode handling above. Always returns a NEW array, never
-// mutates `issues`.
+// as "focus" -- a permissive default-on-garbage-input shape, same idea
+// validIssuesFilter() in Service.qml uses for the setter side. Always
+// returns a NEW array, never mutates `issues`.
 function filterIssues(issues, mode) {
   var arr = isArray(issues) ? issues : []
   if (mode === "all") return arr.slice()
@@ -770,7 +753,6 @@ if (typeof module !== "undefined" && module.exports) {
     repoWebUrl: repoWebUrl,
     truncate: truncate,
     repoPill: repoPill,
-    sortRepos: sortRepos,
     ownerFromNameWithOwner: ownerFromNameWithOwner,
     isExternalOwner: isExternalOwner,
     mergedSettings: mergedSettings,

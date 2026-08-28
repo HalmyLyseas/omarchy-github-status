@@ -680,61 +680,9 @@ test("repoPill: defensive on missing/malformed input, never throws", function ()
   assert.strictEqual(Model.repoPill({ isArchived: "yes" }), "", "non-boolean truthy value must not count as true")
 })
 
-// ---------------------------------------------------------------------- sortRepos
-
-function fakeRepo(name, pushedAt, stars) {
-  return { name: name, pushedAt: pushedAt, stars: stars }
-}
-
-test("sortRepos: activity mode sorts by pushedAt desc (default mode)", function () {
-  var repos = [
-    fakeRepo("old", "2026-01-01T00:00:00Z", 0),
-    fakeRepo("newest", "2026-08-27T00:00:00Z", 0),
-    fakeRepo("middle", "2026-04-01T00:00:00Z", 0)
-  ]
-  var sorted = Model.sortRepos(repos, "activity")
-  assert.deepStrictEqual(sorted.map(function (r) { return r.name }), ["newest", "middle", "old"])
-})
-
-test("sortRepos: stars mode sorts by stars desc, ties broken by pushedAt desc", function () {
-  var repos = [
-    fakeRepo("low-old", "2026-01-01T00:00:00Z", 5),
-    fakeRepo("high", "2026-02-01T00:00:00Z", 100),
-    fakeRepo("tie-newer", "2026-06-01T00:00:00Z", 5),
-    fakeRepo("tie-older", "2026-03-01T00:00:00Z", 5)
-  ]
-  var sorted = Model.sortRepos(repos, "stars")
-  assert.deepStrictEqual(sorted.map(function (r) { return r.name }), ["high", "tie-newer", "tie-older", "low-old"])
-})
-
-test("sortRepos: unrecognized mode falls back to activity, default (undefined) mode too", function () {
-  var repos = [fakeRepo("old", "2026-01-01T00:00:00Z", 999), fakeRepo("new", "2026-08-01T00:00:00Z", 1)]
-  assert.deepStrictEqual(Model.sortRepos(repos, "bogus-mode").map(function (r) { return r.name }), ["new", "old"])
-  assert.deepStrictEqual(Model.sortRepos(repos, undefined).map(function (r) { return r.name }), ["new", "old"])
-})
-
-test("sortRepos: does not mutate the input array, returns a new array", function () {
-  var repos = [fakeRepo("a", "2026-01-01T00:00:00Z", 1), fakeRepo("b", "2026-02-01T00:00:00Z", 2)]
-  var original = repos.slice()
-  var sorted = Model.sortRepos(repos, "stars")
-  assert.deepStrictEqual(repos, original, "input array must be untouched")
-  assert.notStrictEqual(sorted, repos, "must return a new array, not the same reference")
-})
-
-test("sortRepos: adversarial -- huge star values, missing/malformed pushedAt, non-array input, never throws", function () {
-  var repos = [
-    fakeRepo("huge", "2026-01-01T00:00:00Z", Number.MAX_SAFE_INTEGER),
-    fakeRepo("no-pushed-at", undefined, 3),
-    fakeRepo("bad-date", "not a date", 3),
-    { name: "no-stars-field", pushedAt: "2026-05-01T00:00:00Z" }
-  ]
-  var sorted = Model.sortRepos(repos, "stars")
-  assert.strictEqual(sorted.length, 4)
-  assert.strictEqual(sorted[0].name, "huge")
-  assert.deepStrictEqual(Model.sortRepos(null, "activity"), [])
-  assert.deepStrictEqual(Model.sortRepos(undefined, "stars"), [])
-  assert.deepStrictEqual(Model.sortRepos("not an array", "activity"), [])
-})
+// sortRepos and its tests were removed by exchange/33-feedback3-delta-spec.md
+// H3 -- repos render in fetch order (GraphQL PUSHED_AT desc), sliced by
+// repoLimit in Service.qml; no client-side sort layer remains.
 
 // ---------------------------------------------------------------------- lastComment (G2)
 
