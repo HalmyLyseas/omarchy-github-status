@@ -87,6 +87,11 @@
 //     side of this). Repos render in fetch order (GraphQL PUSHED_AT desc)
 //     sliced by repoLimit -- see root.repos below.
 //
+// v1.3.1 delta (exchange/38-feedback4-delta-spec.md, S21 side, I1a/I1b):
+//   - I1a: the H1 "Subscribed" toggle chip's own label now follows its
+//     state instead of staying fixed -- see the chip's own comment below
+//     for the exact rule and the width-reflow decision.
+//
 // This file codes only against the Service public API contract -- the v1
 // surface frozen in 06-design.md, plus the v1.1 additions specified in
 // 19-feedback-delta-spec.md (S8 owns landing them in Service.qml/Model.js).
@@ -719,10 +724,32 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               onToggled: root.myIssuesCollapsed = !root.myIssuesCollapsed
+              // exchange/38-feedback4-delta-spec.md I1a/I1b: the chip's
+              // label now follows its own state instead of a fixed
+              // "Subscribed" -- active (issuesFilter === "focus") reads
+              // "subscribed", inactive reads "all". Lowercase is the
+              // interim casing per I1b (precedent: the removed F1
+              // repo-sort toggle's "recent"/"stars" was lowercase too;
+              // section headers themselves own the uppercase register).
+              // Text.PlainText doesn't apply here the way it does to
+              // remote-data Text elements (see file-wide policy) -- both
+              // strings are local literals, never user/network data, so
+              // there's nothing to sanitize; Button's own Text delegates
+              // don't expose textFormat as an overridable property anyway
+              // (framework file, not ours to touch).
+              //
+              // Width: deliberately NOT pinned to the longer label.
+              // `trailing` (SectionHeader.qml) right-anchors this chip
+              // and the count pill as a Row, so a width change here only
+              // moves the chip's own left edge and the fold-hover
+              // boundary (`trailing.x`-derived, already reactive) --
+              // nothing else in the header shifts or overlaps. Given
+              // that, a fixed-width reservation would just be unused
+              // complexity for a two-word toggle; reflow is accepted.
               extra: Component {
                 Button {
                   anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-                  text: "Subscribed"
+                  text: root.issuesFilter === "focus" ? "subscribed" : "all"
                   selected: root.issuesFilter === "focus"
                   bordered: true
                   foreground: root.foreground
