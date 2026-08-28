@@ -669,7 +669,33 @@ Item {
       if (login) internal.login = login
       log("probe-auth: authenticated" + (login ? " as " + login : ""))
       onFetchSuccess("probe")
+      // Mid-session recovery (full-tree review, exchange/40): when a POLLER
+      // was the source that recorded no-gh/unauthenticated (token revoked /
+      // gh binary temporarily missing while already running), that stale
+      // per-source status survives this probe success -- the derived
+      // `status` would stay blocked (so onStatusChanged never re-fires) and
+      // both trigger*Fetch guards would refuse every fetch forever, with no
+      // re-probe armed either: a permanent wedge until shell restart.
+      // Boot-time degradation never hits this (poller statuses are still
+      // "loading" then), which is why live testing always recovered. A
+      // successful probe is an authoritative "gh exists and is
+      // authenticated" signal, so clear exactly those two stale blocking
+      // values back to "loading" -- the pollers refetch immediately below
+      // and re-derive their own true status.
+      if (internal.dashboardStatus === "no-gh" || internal.dashboardStatus === "unauthenticated") {
+        internal.dashboardStatus = "loading"
+      }
+      if (internal.notifStatus === "no-gh" || internal.notifStatus === "unauthenticated") {
+        internal.notifStatus = "loading"
+      }
       internal.pollersActive = true
+      // pollersActive may already have been true (rising edge lost) -- the
+      // timers' `running` binding won't re-fire triggeredOnStart in that
+      // case, so kick both fetches explicitly; their own re-entrancy
+      // guards make this a no-op whenever a fetch is already in flight or
+      // the state still forbids one.
+      triggerDashboardFetch()
+      triggerNotificationsFetch()
       return
     }
     if (exitCode === 3) { setProbeStatus("no-gh"); reProbeTimer.restart(); return }
@@ -684,7 +710,22 @@ Item {
     } else {
       internal.pollersActive = true
       maybeRearmReProbeForLogin()
+      // Same wedge family as the exit-0 branch above, other half: an
+      // inconclusive probe (offline/error) while a stale POLLER status
+      // still blocks fetching must keep the 5-min probe loop alive --
+      // nothing else can ever clear that block, and this branch's own
+      // status assignment may not change the derived `status` (so
+      // onStatusChanged won't re-arm it).
+      ensureReProbeWhileBlocked()
     }
+  }
+
+  // Full-tree review (exchange/40): as long as the DERIVED status is
+  // no-gh/unauthenticated, the pollers refuse to fetch -- so the only path
+  // back to life is a future probe success. Guarantee one is always
+  // scheduled while blocked; restart() is harmless when already armed.
+  function ensureReProbeWhileBlocked() {
+    if (status === "no-gh" || status === "unauthenticated") reProbeTimer.restart()
   }
 
   // exchange/23-s11-delta-review.md F2: a probe failure classified as
@@ -732,6 +773,12 @@ Item {
         // watchdog's whole reason for existing) is exactly the scenario
         // where the login never gets learned otherwise.
         root.maybeRearmReProbeForLogin()
+        // Full-tree review (exchange/40): if a stale POLLER status still
+        // blocks fetching, this hung probe was the only scheduled way out
+        // -- and with the login already known, maybeRearmReProbeForLogin
+        // above won't re-arm anything. Keep the probe loop alive while
+        // blocked, whatever the login state.
+        root.ensureReProbeWhileBlocked()
       }
     }
   }

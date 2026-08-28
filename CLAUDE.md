@@ -51,7 +51,7 @@ is never performed by an agent.**
    workflow") to spare the user's bar from per-save reload flashes. At
    release the installed folder becomes the canonical clone.
 
-## Environment (measured 2026-08-27, hostname Navi)
+## Environment (measured 2026-08-27 on the author's machine)
 
 Omarchy 4.0.1-1 · Quickshell 0.3.1-1 · Hyprland 0.56.2-1 · gh 2.98.0 (via
 mise). See `exchange/03-shell-api.md` §12 and its traps checklist (§13) —

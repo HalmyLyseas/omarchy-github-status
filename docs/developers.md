@@ -3,7 +3,7 @@
 The distilled why and how of this plugin, for a contributor (or a future
 maintenance session) starting from a bare clone. The README covers using it;
 `CLAUDE.md` carries the project rules and hard constraints. Everything here
-was learned building against a live Omarchy 4.0.1 system (hostname Navi),
+was learned building against a live Omarchy 4.0.1 system,
 usually by reproducing the failure first. The PM workspace's `exchange/`
 numbered docs (present alongside this repo during development, not required
 to build or maintain it) corroborate specific claims below where cited —
