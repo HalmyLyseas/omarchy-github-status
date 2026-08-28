@@ -56,13 +56,13 @@
 // S8 delta pass (exchange/19-feedback-delta-spec.md, on top of 06-design.md):
 //   - `myIssues` added as a public property, same replace-on-success/
 //     keep-last-good-on-failure lifecycle as `openPRs` (F3).
-//   - `repos` is now Model.sortRepos(internal.repos, repoSort) THEN sliced
-//     by repoLimit -- internal.repos itself stays in raw query order; the
-//     sort is applied at read time so a live repoSort change reorders
-//     immediately (F1). `repoSort` + `setRepoSort(mode)` are new public
-//     API: the setter persists through Model.mergedSettings (see its own
-//     header comment for the "updateEntryInline replaces the whole entry"
-//     trap this avoids), never a raw `{repoSort: mode}` write.
+//   - `repos` gained a read-time sort (`repoSort`/`setRepoSort`, F1);
+//     that sort feature was removed again by the v1.3 H3 pass
+//     (exchange/33) -- `repos` now renders in raw query order
+//     (PUSHED_AT desc) sliced by repoLimit. Settings writes still go
+//     through Model.mergedSettings (see its header comment for the
+//     "updateEntryInline replaces the whole entry" trap), never a raw
+//     single-key write.
 //   - probe-auth's stdout (the authenticated login, not a secret) is now
 //     captured into `internal.login` and threaded into
 //     Model.mapNotifications so notification rows can derive `isExternal`/

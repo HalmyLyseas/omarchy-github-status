@@ -720,7 +720,7 @@ function summaryTooltip(state) {
 // `mergedSettings`, same trap, same fix). Always build the full next-state
 // object from `current` (the plugin's existing settings entry, or any
 // falsy value for "no entry yet") first, so a single-setting write like
-// `setRepoSort` can never clobber `dashboardIntervalSec`/`repoLimit`/etc.
+// `setIssuesFilter` can never clobber `dashboardIntervalSec`/`repoLimit`/etc.
 // The `id` key is stripped from `current` even if present -- the host adds
 // it back itself, keyed off the moduleName argument, not off anything in
 // this object.
