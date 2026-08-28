@@ -2,10 +2,12 @@
 //
 // Panel + KeyboardPanel per exchange/03-shell-api.md §5. Single scrollable
 // column: Hero (title/status/refresh), Inbox, Review requests, My open PRs,
-// My open issues, Repo activity -- section order per 06-design.md "What v1
+// My open issues, Repositories -- section order per 06-design.md "What v1
 // does" (review requests before own PRs: other people blocked on the user
 // outrank the user's own backlog) amended by
 // exchange/19-feedback-delta-spec.md F3 (issues section inserted after PRs).
+// "Repositories" was "Repo activity" through v1.2; renamed by
+// exchange/33-feedback3-delta-spec.md H3 (see the v1.3 delta note below).
 //
 // v1.1 delta (exchange/19-feedback-delta-spec.md, S9 side, F1/F2/F3/F4/F5/F6):
 //   - every section header is the new SectionHeader.qml: label + a
@@ -58,12 +60,32 @@
 //     SectionHeader itself owns the click/hover surface and chevron; see
 //     its own header comment for the hit-area-separation geometry.
 //   - G4: the My open issues header gained a Focus/All ButtonGroup in its
-//     `extra` slot, byte-for-byte the same idiom as the Repo activity
-//     header's F1 sort toggle, wired to svc.issuesFilter/setIssuesFilter.
-//     svc.myIssues is already the post-filter list (Service.qml's job, same
-//     ownership split as repoSort/repos) -- this file does not re-filter by
-//     `subscribed` itself, only by search on top of whatever svc.myIssues
-//     already returned.
+//     `extra` slot, byte-for-byte the same idiom as the (now-removed, see
+//     v1.3 below) Repo activity header's F1 sort toggle, wired to
+//     svc.issuesFilter/setIssuesFilter. svc.myIssues is already the
+//     post-filter list (Service.qml's job) -- this file does not re-filter
+//     by `subscribed` itself, only by search on top of whatever
+//     svc.myIssues already returned.
+//
+// v1.3 delta (exchange/33-feedback3-delta-spec.md, S18 side, H1/H2/H3):
+//   - H1: the G4 Focus/All ButtonGroup above became a single "Subscribed"
+//     toggle chip (one Button, `selected` <=> issuesFilter === "focus") --
+//     UI-only reshape, svc.issuesFilter/setIssuesFilter and their
+//     persistence are untouched.
+//   - H2: SafeToolTip's default (style-provided) "open above the hovered
+//     row" position collided with whatever sat directly above -- the
+//     section header itself for a section's first row (reported as a
+//     "detached" tooltip), a neighboring row's text otherwise. Fixed by
+//     opening below the row instead; see SafeToolTip's own header comment
+//     for the full diagnosis and exchange/34-s18-implementation.md for the
+//     repro/proof. (The "hovering a row does nothing" half of the same
+//     report turned out to be correct, spec-compliant behavior -- that
+//     row's real GitHub issue genuinely has zero comments.)
+//   - H3: "Repo activity" is now "Repositories"; its F1 recent/stars sort
+//     toggle is removed entirely (not just hidden), along with
+//     svc.repoSort/setRepoSort and Model.sortRepos (Service.qml/Model.js's
+//     side of this). Repos render in fetch order (GraphQL PUSHED_AT desc)
+//     sliced by repoLimit -- see root.repos below.
 //
 // This file codes only against the Service public API contract -- the v1
 // surface frozen in 06-design.md, plus the v1.1 additions specified in
@@ -196,9 +218,9 @@ Panel {
   }
   readonly property var reviewRequests: svc && svc.reviewRequests ? svc.reviewRequests : []
   readonly property var openPRs: svc && svc.openPRs ? svc.openPRs : []
-  // G4: svc.myIssues is already post-Focus/All-filter (Service.qml's job,
-  // same ownership split as repos/repoSort) -- this is the shown set before
-  // G1 search narrows it further below.
+  // G4: svc.myIssues is already post-subscribed-filter (Service.qml's job,
+  // same ownership split repos has for its own read-time slice) -- this is
+  // the shown set before G1 search narrows it further below.
   readonly property var myIssues: svc && svc.myIssues ? svc.myIssues : []
   readonly property var repos: svc && svc.repos ? svc.repos : []
 
@@ -218,21 +240,17 @@ Panel {
   // first meant up to four sections could show a false confirmed-"0" (their
   // own backing arrays still empty) the instant the OTHER poller won the
   // race. Inbox is backed by the notifications poller only; Review
-  // requests/My PRs/My issues/Repo activity are all backed by the single
+  // requests/My PRs/My issues/Repositories are all backed by the single
   // combined dashboard fetch. A null svc is "not synced" on both, same as
   // before.
   readonly property bool dashboardSynced: !!svc && Number(svc.dashboardLastSyncMs) !== 0
   readonly property bool notifSynced: !!svc && Number(svc.notificationsLastSyncMs) !== 0
 
-  readonly property string repoSort: svc && svc.repoSort ? String(svc.repoSort) : "activity"
-
-  function setRepoSort(mode) {
-    if (svc && typeof svc.setRepoSort === "function") svc.setRepoSort(mode)
-  }
-
-  // G4: same mirror-property + setter shape as repoSort/setRepoSort above,
-  // against the Service.qml contract in exchange/26-feedback2-delta-spec.md
-  // (issuesFilter "focus"|"all" default "focus", setIssuesFilter(mode)).
+  // G4/H1: mirror-property + setter shape against the Service.qml contract
+  // (issuesFilter "focus"|"all" default "focus", setIssuesFilter(mode)) --
+  // H1 (exchange/33-feedback3-delta-spec.md) only reshaped the UI (the
+  // Focus/All ButtonGroup below became a single "Subscribed" toggle chip),
+  // the backend/persistence contract here is untouched.
   readonly property string issuesFilter: svc && svc.issuesFilter ? String(svc.issuesFilter) : "focus"
 
   function setIssuesFilter(mode) {
@@ -669,9 +687,22 @@ Panel {
 
           // ------------------------------------------------- open issues
           // F3: issues the user themselves opened, any repo -- distinct from
-          // review requests (PRs waiting on the user) and open PRs (the
-          // user's own PR backlog). G4: Focus/All toggle, same idiom as the
-          // Repo activity header's F1 sort toggle below.
+          // review requests (PRs waiting on the user) and own PRs (the
+          // user's own PR backlog).
+          //
+          // exchange/33-feedback3-delta-spec.md H1: the old Focus/All
+          // two-option ButtonGroup is now a single "Subscribed" toggle
+          // chip -- UI-only reshape, the backend contract underneath
+          // (svc.issuesFilter "focus"|"all", svc.setIssuesFilter(mode),
+          // persistence) is untouched (see root.issuesFilter/
+          // setIssuesFilter above, still exactly the G4 mirror-property
+          // shape). Chip active (selected fill) <=> issuesFilter ===
+          // "focus" (only subscribed issues shown, the default); clicking
+          // it flips to the other mode. Same visual idiom the removed F1
+          // repo-sort/G4 issues ButtonGroup used for its own chips --
+          // this is literally one of that ButtonGroup's own Button
+          // delegates, instantiated directly, since there's now only one
+          // option to show.
           Column {
             width: parent.width
             spacing: Style.space(4)
@@ -685,19 +716,17 @@ Panel {
               fontFamily: root.fontFamily
               onToggled: root.myIssuesCollapsed = !root.myIssuesCollapsed
               extra: Component {
-                ButtonGroup {
+                Button {
                   anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-                  options: [
-                    { value: "focus", label: "Focus" },
-                    { value: "all", label: "All" }
-                  ]
-                  value: root.issuesFilter
+                  text: "Subscribed"
+                  selected: root.issuesFilter === "focus"
+                  bordered: true
                   foreground: root.foreground
                   accent: Color.accent
                   fontFamily: root.fontFamily
                   fontSize: Style.font.caption
                   focusable: false
-                  onChanged: function(v) { root.setIssuesFilter(v) }
+                  onClicked: root.setIssuesFilter(root.issuesFilter === "focus" ? "all" : "focus")
                 }
               }
             }
@@ -721,43 +750,27 @@ Panel {
 
           PanelSeparator { foreground: root.foreground }
 
-          // ------------------------------------------------- repo activity
+          // --------------------------------------------------- repositories
+          // exchange/33-feedback3-delta-spec.md H3: "Repo Activity" ->
+          // "Repositories"; the F1 recent/stars sort toggle is removed
+          // entirely (not just hidden) -- search plus the default
+          // last-activity order are enough, and it's one less control to
+          // scan. Repos render in fetch order (GraphQL PUSHED_AT desc,
+          // scripts/fetch-dashboard's own query order) sliced by
+          // repoLimit -- see root.repos below, no client-side sort layer
+          // left over this delta.
           Column {
             width: parent.width
             spacing: Style.space(4)
 
             SectionHeader {
-              text: "REPO ACTIVITY"
+              text: "REPOSITORIES"
               count: root.filteredRepos.length
               synced: root.dashboardSynced
               collapsed: root.repoActivityCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
               onToggled: root.repoActivityCollapsed = !root.repoActivityCollapsed
-              // F1: compact recent/stars sort toggle, left of the count
-              // pill. ButtonGroup's value/changed contract maps 1:1 onto
-              // svc.repoSort/setRepoSort -- setRepoSort itself validates the
-              // mode (Service.qml's job), so this click is a plain pass-
-              // through. Also doubles as G3's hit-area-separation proof:
-              // this toggle lives in SectionHeader's `extra` slot, strictly
-              // right of the fold MouseArea's geometric boundary -- see
-              // SectionHeader.qml's own header comment.
-              extra: Component {
-                ButtonGroup {
-                  anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-                  options: [
-                    { value: "activity", label: "recent" },
-                    { value: "stars", label: "stars" }
-                  ]
-                  value: root.repoSort
-                  foreground: root.foreground
-                  accent: Color.accent
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  focusable: false
-                  onChanged: function(v) { root.setRepoSort(v) }
-                }
-              }
             }
 
             Column {
@@ -829,6 +842,29 @@ Panel {
   // does not set that, so any GitHub-controlled string (e.g. a commit
   // headline) must go through this instead, never through PanelToolTip
   // directly.
+  //
+  // exchange/33-feedback3-delta-spec.md H2 fix (diagnosed + proven in
+  // exchange/34-s18-implementation.md): the active QQC2 style's default
+  // ToolTip position
+  // (/usr/lib/qt6/qml/QtQuick/Controls/Basic/ToolTip.qml:12-13) opens the
+  // popup ABOVE its `parent` (`y: -implicitHeight - 3`). `parent` IS
+  // correctly the individual hovered row (verified live -- each
+  // instance's parent is that row's own Item, never shared/mis-anchored,
+  // ruling out the "shared tooltip instance" theory), but every section's
+  // Column only puts Style.space(4) (~4px) between its SectionHeader and
+  // its first row, and the same Style.space(4) between every other pair of
+  // rows -- far less than this tooltip's own ~35px height. Opening upward
+  // therefore always paints over whatever sits directly above the hovered
+  // row: the section header itself for a section's first row (this is
+  // what the human's screenshot and the harness repro
+  // (shots-h2/01-hover-issue-row1.png) both show -- "detached near the
+  // header" is that collision, not a wrong-row bug), or the previous row's
+  // own title/subtitle text for every other row (reproduced too:
+  // shots-h2/01-hover-issue-row3.png covers row 2, .../01-hover-issue-
+  // rowlast.png covers the second-to-last row). Opening BELOW the row
+  // instead never has this problem: Style.space(4) below any row is
+  // always followed by either another row or a PanelSeparator, never text
+  // this tooltip could occlude.
   component SafeToolTip: ToolTip {
     id: tip
     property string fontFamily: Style.font.family
@@ -842,6 +878,12 @@ Panel {
 
     delay: 400
     padding: 0
+    // H2 fix: below the row (`parent.height + gap`), not the style
+    // default (`-implicitHeight - 3`, above the row) -- see header comment
+    // above. `x` keeps the style's own horizontal centering-on-parent
+    // binding (never part of the reported defect -- only vertical
+    // placement collided with neighboring content).
+    y: parent ? parent.height + Style.space(3) : 0
 
     background: BorderSurface {
       color: Color.tooltip.background
