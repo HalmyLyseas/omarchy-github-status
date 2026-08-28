@@ -40,6 +40,18 @@
 # without re-verifying against a real `gh api graphql` call and updating
 # that doc.
 #
+# Widened live again 2026-08-28: `repositories(first: 20, ...)` ->
+# `repositories(first: 30, ...)` (this line only -- `openPRs`, `myIssues`,
+# and `reviewRequests` are unchanged). Reviewer finding: manifest.json's
+# `repoLimit` schema entry allows 3-30 (max 30), `Model.js`'s `CAP_REPOS`
+# is 30, and `Service.qml` clamps `repoLimit` to [3,30] before slicing
+# `internal.repos.slice(0, repoLimit)` -- but this query only ever fetched
+# 20 repo nodes, so a user who set repoLimit above 20 silently saw at most
+# 20 repos. 30 was always the intended cap; the GraphQL window was the
+# oversight. Live re-verified against this account with the edited query
+# -- see exchange/43-repo-window-fix.md for the trimmed evidence
+# (node count and `totalCount`, no top-level `errors` key).
+#
 # NOTE (deviation from exchange/06-design.md's literal suggestion of
 # `-f query=@-`): `gh api`'s `@<path>`/`@-` file/stdin-reading syntax is only
 # documented and only actually works for the typed `-F/--field` flag, not
@@ -80,7 +92,7 @@ query {
         comments(last: 1) { nodes { author { login } updatedAt } }
       }
     }
-    repositories(first: 20, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) {
+    repositories(first: 30, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) {
       totalCount
       nodes {
         name pushedAt isPrivate isArchived isFork stargazerCount
