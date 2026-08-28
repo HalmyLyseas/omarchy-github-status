@@ -108,6 +108,25 @@ UI in this version):
 | Repos shown in repositories list | 10 | 3–30 | How many of your repos appear in the Repositories section, most-recently-pushed first. |
 | Subscribed only | Focus | Focus / All | Whether My open issues shows only issues you're still subscribed to (Focus) or every open issue you authored (All) — also toggleable from the panel's **Subscribed** chip in the My open issues section header. |
 
+## API usage
+
+At default settings, here's what the plugin costs against your GitHub rate
+limits:
+
+| Poll | Default interval | Steady-state cost |
+|---|---|---|
+| Notifications (REST) | 60s | ~60 requests/hr, but an unchanged inbox returns HTTP 304 via conditional (ETag) requests, which cost **nothing** — typically ~1 counted request/hr in practice |
+| Dashboard (GraphQL: PRs, review requests, issues, repos) | 180s | ~20 calls/hr, ~1 point each — ~20 points/hr |
+
+GitHub gives every authenticated user, free plans included, 5000 REST
+`core` requests/hour and 5000 GraphQL points/hour — separate budgets. At
+these defaults the plugin uses well under 1–2% of either one per hour, so
+there's plenty of headroom even on a free account; the panel's manual
+refresh button adds one extra dashboard call per click, and raising either
+interval in Settings lowers usage further. The plugin never calls GitHub's
+REST search API, so its much tighter separate 30-requests-per-minute budget
+is never touched.
+
 ## Security & privacy
 
 - **The plugin never sees a credential.** All GitHub access goes through
