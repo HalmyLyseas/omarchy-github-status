@@ -11,11 +11,12 @@ From the bar you can see, at a glance and in one click:
 - Unread GitHub notifications — count in the bar, list in the panel.
 - Your own open PRs, with CI status and review decision.
 - PRs waiting on your review.
-- Open issues you yourself authored, across every repo — with a Focus/All
-  toggle so unsubscribed clutter stays out of your way by default.
+- Open issues you yourself authored, across every repo — with a
+  **Subscribed** toggle so unsubscribed clutter stays out of your way by
+  default.
 - Activity across your own repos: latest commit, open issues/PRs, latest
-  release — sortable by recent activity or star count, with an
-  archived/fork/private status pill.
+  release, most-recently-pushed first, with an archived/fork/private status
+  pill.
 - A live search field at the top of the panel filters every section as you
   type.
 - Hover a PR or issue row to see who commented last and when.
@@ -34,13 +35,12 @@ From the bar you can see, at a glance and in one click:
   relative last-activity age for every open PR you have across every repo
   you can access, not just one repo at a time.
 - **My open issues** — every issue you yourself opened and is still open,
-  across every repo, with a relative last-activity age. A **Focus/All**
-  toggle in the section header (default: Focus) hides issues you've
+  across every repo, with a relative last-activity age. A **Subscribed**
+  toggle chip in the section header (active by default) hides issues you've
   unsubscribed from, so old clutter you no longer care about doesn't linger
-  in the panel — flip to All to see everything again.
-- **Repo activity** — your own repos with open issue/PR counts and the
-  latest release tag where one exists. Sort by last activity (default) or
-  star count with a one-click toggle in the section header.
+  in the panel — toggle it off to see every open issue again.
+- **Repositories** — your own repos with open issue/PR counts and the latest
+  release tag where one exists, most-recently-pushed first.
 - **Search** — a live filter field at the top of the panel. Type anything
   and every section (notifications, PRs, review requests, issues, repos)
   narrows to matching title/repo/owner/name in place; count pills reflect
@@ -103,11 +103,10 @@ UI in this version):
 
 | Setting | Default | Range | Meaning |
 |---|---|---|---|
-| Dashboard refresh interval | 180s | 60–3600s | How often PRs, review requests, and repo activity refresh. |
+| Dashboard refresh interval | 180s | 60–3600s | How often PRs, review requests, and repositories refresh. |
 | Notifications poll interval | 60s | 60–600s | How often the notifications inbox polls. Matches GitHub's own guidance; conditional requests mean an unchanged inbox costs nothing. |
-| Repos shown in activity list | 10 | 3–30 | How many of your repos appear in the activity section. |
-| Repo sort | Last activity | Last activity / Stars | Order of the repo activity list — also toggleable from the panel's Repo activity section header. |
-| Issues filter | Focus | Focus / All | Whether My open issues shows only issues you're still subscribed to (Focus) or every open issue you authored (All) — also toggleable from the panel's My open issues section header. |
+| Repos shown in repositories list | 10 | 3–30 | How many of your repos appear in the Repositories section, most-recently-pushed first. |
+| Subscribed only | Focus | Focus / All | Whether My open issues shows only issues you're still subscribed to (Focus) or every open issue you authored (All) — also toggleable from the panel's **Subscribed** chip in the My open issues section header. |
 
 ## Security & privacy
 

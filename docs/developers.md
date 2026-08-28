@@ -15,9 +15,9 @@ treat them as evidence, not as something a fresh clone needs to have.
 |---|---|
 | `Service.qml` | The data layer and the only owner of machine-wide state: every `Process`, `Timer`, and piece of mutable data lives here. Loaded once by the shell (`kinds: ["service", ...]`, `keepLoaded: true`). |
 | `BarWidget.qml` | The bar button. Eager-`Loader`-hosted panel, GitHub octicon + count pill. One instance **per monitor** — reads `Service.qml`'s public properties, owns none of its own. |
-| `Panel.qml` | The popup UI: hero, degradation hint, search field (v1.2), five sections (inbox, review requests, open PRs, open issues, repo activity), each independently foldable (v1.2). One instance **per monitor**, same as `BarWidget.qml`. Binds to the service; writes nothing back to it except calling `refresh()`/`openUrl()`/`setRepoSort()`/`setIssuesFilter()`. |
-| `SectionHeader.qml` | v1.1: kit-styled section header (label + right-aligned count/`"…"` pill, optional `extra` slot) shared by all five `Panel.qml` sections; also where the F1 recent/stars and (v1.2) G4 Focus/All toggles are instantiated. v1.2 adds `collapsed`/`toggled()` for the click-to-fold header (G3). |
-| `Model.js` | Pure logic, no Quickshell imports, ES5-compatible so plain Node can `require()` it: every `gh` JSON → UI-shape mapping function, the URL allowlist, the failure classifier, field/list caps, (v1.1) `repoPill`/`sortRepos`/`ownerFromNameWithOwner`/`isExternalOwner`/`mergedSettings`, and (v1.2) `matchesQuery`/`filterIssues`/`lastComment`/`subscribedFromViewerSubscription`. Fully unit-testable without a running shell. |
+| `Panel.qml` | The popup UI: hero, degradation hint, search field (v1.2), five sections (inbox, review requests, open PRs, open issues, repositories — renamed from "repo activity" in v1.3), each independently foldable (v1.2). One instance **per monitor**, same as `BarWidget.qml`. Binds to the service; writes nothing back to it except calling `refresh()`/`openUrl()`/`setIssuesFilter()` (v1.3 H3 dropped `setRepoSort()` along with the sort feature). |
+| `SectionHeader.qml` | v1.1: kit-styled section header (label + right-aligned count/`"…"` pill, optional `extra` slot) shared by all five `Panel.qml` sections; the My open issues header's `extra` slot holds the v1.3 "Subscribed" toggle chip (a single `Button`, replacing v1.2's Focus/All `ButtonGroup`) — the Repositories header's own `extra` slot is empty since v1.3 removed its sort toggle. v1.2 adds `collapsed`/`toggled()` for the click-to-fold header (G3). |
+| `Model.js` | Pure logic, no Quickshell imports, ES5-compatible so plain Node can `require()` it: every `gh` JSON → UI-shape mapping function, the URL allowlist, the failure classifier, field/list caps, (v1.1) `repoPill`/`ownerFromNameWithOwner`/`isExternalOwner`/`mergedSettings`, and (v1.2) `matchesQuery`/`filterIssues`/`lastComment`/`subscribedFromViewerSubscription`. `sortRepos` existed in v1.1–v1.2 and was removed in v1.3 (H3). Fully unit-testable without a running shell. |
 | `scripts/fetch-dashboard` | `bash`: `exec gh api graphql` with the combined query (openPRs + repos + review-requests + v1.1's `myIssues`, each PR/issue/review-request node also carrying v1.2's `comments(last: 1)` and (issues only) `viewerSubscription`) embedded as a fixed string. |
 | `scripts/fetch-notifications` | `bash`: `exec gh api -i notifications [-H "If-None-Match: $1"]` — the ETag is the one remote-derived script argument anywhere in this plugin. |
 | `scripts/probe-auth` | `bash`: `gh api user --jq .login` under `timeout 25`, translated to one of five stable exit codes. Does **not** call `gh auth status` (see below). |
@@ -156,7 +156,7 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   delta, up from 19 at v1.1 and 12 pre-delta — only +1 despite G2 adding
   three new `SafeToolTip` call sites (`PrRow`/`ReviewRequestRow`/`IssueRow`)
   because `SafeToolTip`'s own `PlainText` is declared once, on its shared
-  `component` definition (`Panel.qml:832-...`); reusing the component at
+  `component` definition (`Panel.qml:868-...`); reusing the component at
   three more sites doesn't add three more grep-visible lines. The one new
   hit is the G1 search row's "✕" clear glyph. `SectionHeader.qml` → 2 (the
   pre-existing count pill plus v1.2's fold chevron, both synthesized glyphs —
@@ -167,15 +167,35 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   auto-detected and rendered HTML-like markup. One catch this plugin's own
   review found: `qs.Ui.PanelToolTip` (the first-party tooltip component) does
   **not** set `Text.PlainText` on its internal `Text` — it inherits Qt
-  Quick's `Text.AutoText` default. Since the repo-activity row's hover
-  tooltip shows `lastCommitHeadline` (a commit message — GitHub-controlled,
-  in principle attacker-influenceable even on the user's own repo via a
-  merged PR from someone else), `Panel.qml` defines `component SafeToolTip:
+  Quick's `Text.AutoText` default. Since the repository row's hover tooltip
+  shows `lastCommitHeadline` (a commit message — GitHub-controlled, in
+  principle attacker-influenceable even on the user's own repo via a merged
+  PR from someone else), `Panel.qml` defines `component SafeToolTip:
   ToolTip { ... }` — a structural copy of `PanelToolTip` with `Text.
   PlainText` forced on its `contentItem`. **Never use `PanelToolTip`
   directly on remote-derived text in this file** — `grep -n PanelToolTip
   Panel.qml` should only ever match the comments explaining why
   `SafeToolTip` exists, never an actual instantiation.
+
+- **`SafeToolTip` opens below its row, not above (v1.3, H2).** The active
+  QQC2 style's default `ToolTip` position opens *above* its `parent`
+  (`y: -implicitHeight - 3`, e.g.
+  `/usr/lib/qt6/qml/QtQuick/Controls/Basic/ToolTip.qml:12-13`). Every
+  section's rows sit only `Style.space(4)` (~4px) below their
+  `SectionHeader`, and the same `Style.space(4)` apart from each other —
+  far less than a tooltip's own ~35px height — so opening upward always
+  painted over whatever sat directly above the hovered row: the section
+  header for a section's first row (reported live as a tooltip rendering
+  "detached" near the header, exchange/32-human-feedback.md #2), or the
+  previous row's own text otherwise. `SafeToolTip` now sets
+  `y: parent.height + Style.space(3)` to open below instead — see
+  `Panel.qml`'s own `SafeToolTip` header comment and
+  `exchange/34-s18-implementation.md` for the full repro/diagnosis. The
+  *other* half of that same bug report ("hovering one row does nothing")
+  turned out not to be a bug at all: that row's real GitHub issue
+  genuinely has zero comments (`comments(last: 1)` correctly returns no
+  nodes), so an empty tooltip is the spec-correct result, not a wiring
+  failure — verified against live-fetched data before touching any code.
 
 - **`viewer.issues(states: OPEN, ...)` with no `filterBy` is already
   authored-scoped — no `search author:@me` fallback needed.** v1.1's F3
@@ -196,20 +216,23 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   `exchange/19-feedback-delta-spec.md` is the documented next step — verify
   live again before switching, the same way this decision itself was made.
 
-- **`sortRepos` is a client-side sort over the already-fetched 20-repo
-  query window, not a second query.** F1 ("sort by last activity or
-  stars") sorts whatever `repositories(first: 20, ...)` already returned in
-  `Model.js`, then `Service.qml` slices to `repoLimit` (3–30) at read time —
-  changing `repoSort` re-orders instantly with no new `gh` call. This is
-  correct at this project's scale (a solo maintainer's own repo count) but
-  is a real limitation: a star-sort over an account with *more* than 20
-  repos would only ever consider the 20 most-recently-pushed (the query's
-  fixed `orderBy`), never the account's actual highest-starred repo if it
-  happens to sit outside that window. Documented here rather than fixed
-  because widening or re-querying per sort mode is out of scope for a
-  status-bar panel capped at 30 visible rows anyway — flag this file if the
-  repo cap or the query's `first:` value ever changes without checking
-  whether this note still holds.
+- **The repo sort feature (F1: `Model.sortRepos`, `Service.qml`'s
+  `repoSort`/`setRepoSort()`, the recent/stars header toggle) was removed
+  entirely by `exchange/33-feedback3-delta-spec.md` H3.** Repos now render
+  in the fetch order `repositories(first: 20, orderBy: {field: PUSHED_AT,
+  direction: DESC}, ...)` already returns (`scripts/fetch-dashboard`),
+  sliced to `repoLimit` (3–30) at read time in `Service.qml` — no
+  client-side sort layer left, and the "Repositories" section header
+  (renamed from "Repo activity" by the same H3) carries no toggle, just its
+  label and count pill. **A stale `repoSort` key left over in an existing
+  user's `shell.json` entry from before 1.3 is harmless**: nothing in
+  `Service.qml` reads it anymore, and `Model.mergedSettings`'s "current
+  entry plus one changed key" merge shape (still used by `setIssuesFilter`)
+  preserves whatever unrecognized keys are already present rather than
+  stripping them, so the key just sits there inert — never re-read, never
+  displayed, never causing a schema/validation error. The manifest's own
+  `repoSort` schema entry and default are also removed, so Omarchy's
+  settings form no longer offers it either.
 
 - **The probe watchdog, and why `probe-auth` needs its own `timeout 25`.**
   `dashboardProc`/`notificationsProc` both `exec gh ...` directly in their
@@ -357,14 +380,14 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   panel root, reset alongside `searchQuery` in the same `onOpenedChanged`
   branch — "resets on panel reload" is the spec's own words, not an
   implementation shortcut. This is a different persistence tier than
-  `repoSort`/`issuesFilter` (both go through `Model.mergedSettings` →
-  `shell.updateEntryInline`, survive a restart) on purpose: a fold is a
+  `issuesFilter` (goes through `Model.mergedSettings` →
+  `shell.updateEntryInline`, survives a restart) on purpose: a fold is a
   transient "I don't need to see this right now" gesture scoped to one
-  look at the panel, not a standing preference like sort order or which
-  issues to see by default — persisting it would mean a section a user
-  folded once during a busy afternoon stays invisible forever until they
-  remember to unfold it, silently hiding future data the way F4's own
-  "less old clutter" complaint was originally about. If a future feedback
+  look at the panel, not a standing preference like which issues to see by
+  default — persisting it would mean a section a user folded once during a
+  busy afternoon stays invisible forever until they remember to unfold it,
+  silently hiding future data the way F4's own "less old clutter" complaint
+  was originally about. If a future feedback
   round asks for persisted fold state, it is a new, explicit decision, not
   a natural extension of this one.
 
