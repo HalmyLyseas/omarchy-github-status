@@ -1,7 +1,9 @@
 // SectionHeader.qml -- kit-styled panel section header: a small-caps label
 // (PanelSectionHeader) plus a right-aligned count pill, used by all five
 // sections in Panel.qml (Inbox, Review requests, My open PRs, My open
-// issues, Repo activity) per exchange/19-feedback-delta-spec.md F4.
+// issues, Repositories) per exchange/19-feedback-delta-spec.md F4. ("Repo
+// activity" was renamed "Repositories" by exchange/33-feedback3-delta-spec.md
+// H3 -- see the next paragraph.)
 //
 // Pill text: the rendered count (post-cap/slice/filter -- whatever the
 // caller is actually about to draw), or "…" before the service's first
@@ -10,10 +12,13 @@
 // policy in Panel.qml.
 //
 // `extra` is an optional Component instantiated between the label and the
-// count pill -- Panel.qml uses this for the F1 repo-sort toggle in the
-// Repo activity header ("left of the count pill" per the spec) and, per
-// exchange/26-feedback2-delta-spec.md G4, the Focus/All toggle in the My
-// open issues header. Every other section leaves it unset.
+// count pill. Historically Panel.qml used this for the F1 repo-sort toggle
+// in the Repo activity header ("left of the count pill" per the spec) and,
+// per exchange/26-feedback2-delta-spec.md G4, the single-toggle chip in the
+// My open issues header (Focus/All at first, later H1's single "Subscribed"
+// chip). exchange/33-feedback3-delta-spec.md H3 removed the sort feature
+// entirely and renamed the section "Repositories" -- that header no longer
+// passes `extra` at all. The issues header is the only remaining user.
 //
 // exchange/26-feedback2-delta-spec.md G3 (fold): a header is clickable
 // (toggles Panel.qml's per-section `collapsed` state) exactly when it is
@@ -27,12 +32,11 @@
 // Hit-area separation (G3's own requirement, "verify by geometry, not
 // hope"): the fold click/hover region is sized to
 // `trailing.x - a small gap`, i.e. it stops exactly where the trailing Row
-// (extra + pill) begins. That Row's own children (the repo-sort
-// ButtonGroup, the G4 Focus/All ButtonGroup, the count pill) sit strictly
-// to the right of that boundary and are never covered by the fold
-// MouseArea, so a click on either toggle can never register as a fold --
-// this is a real non-overlapping rectangle, not a z-order/event-consumption
-// trick.
+// (extra + pill) begins. That Row's own children (the issues header's
+// toggle chip when present, the count pill) sit strictly to the right of
+// that boundary and are never covered by the fold MouseArea, so a click on
+// the toggle can never register as a fold -- this is a real non-overlapping
+// rectangle, not a z-order/event-consumption trick.
 import QtQuick
 import qs.Commons
 import qs.Ui

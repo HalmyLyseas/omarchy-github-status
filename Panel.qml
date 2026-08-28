@@ -843,28 +843,43 @@ Panel {
   // headline) must go through this instead, never through PanelToolTip
   // directly.
   //
-  // exchange/33-feedback3-delta-spec.md H2 fix (diagnosed + proven in
+  // exchange/33-feedback3-delta-spec.md H2 fix, v1 (diagnosed + proven in
   // exchange/34-s18-implementation.md): the active QQC2 style's default
   // ToolTip position
   // (/usr/lib/qt6/qml/QtQuick/Controls/Basic/ToolTip.qml:12-13) opens the
   // popup ABOVE its `parent` (`y: -implicitHeight - 3`). `parent` IS
   // correctly the individual hovered row (verified live -- each
   // instance's parent is that row's own Item, never shared/mis-anchored,
-  // ruling out the "shared tooltip instance" theory), but every section's
-  // Column only puts Style.space(4) (~4px) between its SectionHeader and
-  // its first row, and the same Style.space(4) between every other pair of
-  // rows -- far less than this tooltip's own ~35px height. Opening upward
-  // therefore always paints over whatever sits directly above the hovered
-  // row: the section header itself for a section's first row (this is
-  // what the human's screenshot and the harness repro
-  // (shots-h2/01-hover-issue-row1.png) both show -- "detached near the
-  // header" is that collision, not a wrong-row bug), or the previous row's
-  // own title/subtitle text for every other row (reproduced too:
-  // shots-h2/01-hover-issue-row3.png covers row 2, .../01-hover-issue-
-  // rowlast.png covers the second-to-last row). Opening BELOW the row
-  // instead never has this problem: Style.space(4) below any row is
-  // always followed by either another row or a PanelSeparator, never text
-  // this tooltip could occlude.
+  // ruling out the "shared tooltip instance" theory). v1 changed this to
+  // always open BELOW the row instead.
+  //
+  // exchange/35-s19-delta-review.md F1/F2 (S20 flip-to-fit fix): always-
+  // below just relocated the collision, in two ways -- (F1) for any row
+  // followed by another row in the same section (the common case), the
+  // ~35px-tall tooltip landed mostly on top of the NEXT row's own text
+  // (Style.space(4), ~4px, separates rows -- nowhere near enough
+  // clearance); (F2) for the last row of the last section, the tooltip's
+  // bottom could land past the panel card's own bottom edge -- QQC2
+  // Popups render via the top-level Overlay, not as a normal child of
+  // this item tree, so they ignore every ancestor's `clip` (confirmed by
+  // reading BorderSurface/KeyboardPanel.qml -- neither clips) and paint
+  // straight onto the transparent full-screen layer-shell window behind
+  // the visible card.
+  //
+  // Fix: flip-to-fit against the panel's own scrollable viewport
+  // (`viewport`, set explicitly by each of the 4 call sites to
+  // `panelFlick` -- a plain property, not a parent-chain walk, so this
+  // component stays decoupled from exactly where in the tree it's
+  // instantiated, per the PM's explicit "pass the geometry, don't walk
+  // parents" instruction). Below stays the default (it never re-collides
+  // with a header, the original H2 complaint); only when the row sits
+  // close enough to the viewport's own visible bottom edge that the
+  // tooltip would cross it does it open ABOVE instead (falling back to
+  // below only if THAT would also cross the viewport's top -- a
+  // scrolled-boundary edge case, never observed live but cheap to guard,
+  // and never worse than the v1 always-below fix it replaces). See
+  // exchange/36-s20-release.md for the proof (rows 1/middle/last,
+  // scrolled and unscrolled).
   component SafeToolTip: ToolTip {
     id: tip
     property string fontFamily: Style.font.family
@@ -875,15 +890,72 @@ Panel {
     // popup arbitrarily wide against a pathological remote string; elide
     // alone bounds render cost but not layout width.
     property real maxWidth: Style.space(320)
+    // S20 flip-to-fit input (exchange/35 F1/F2): the Flickable whose
+    // visible (clipped) viewport bounds the tooltip's allowed vertical
+    // range. Set explicitly by each call site -- null-safe, falling back
+    // to the old always-below placement if ever left unset. Typed as
+    // Flickable (not a generic Item) so contentItem/contentY below resolve
+    // statically instead of adding to the missing-property baseline.
+    property Flickable viewport: null
+    // S20 flip-to-fit input: an explicit reference to this tooltip's own
+    // hovered row, set by each call site to its own row id (e.g.
+    // `rowItem: issueRow`). Deliberately NOT read via the bare `parent`
+    // property from inside this y binding's JS function body -- measured
+    // live (S20 probe harness, .../scratchpad/probe-s20/) that
+    // `parent.mapToItem(...)`/`parent.mapToGlobal(...)` called from
+    // inside a JS function block here resolves to the SAME single Item's
+    // geometry for every one of a Repeater's ~20 delegate instances (a
+    // `pragma ComponentBehavior: Bound`-class scoping defect: this file's
+    // components aren't declared Bound, a pre-existing, documented
+    // condition -- see docs/developers.md's qmllint baseline note). The
+    // pre-S20 code never surfaced this because it only ever read
+    // `parent.height`, uniform across every row of a given type, so a
+    // wrong-but-same-height `parent` was undetectable; this fix reads
+    // *position*, which is not uniform, so the latent bug became a real
+    // one. An explicit property assigned directly at each call site (a
+    // plain per-instance declarative binding, not a JS-function `parent`
+    // lookup) sidesteps it entirely -- confirmed correct per-row live.
+    property Item rowItem: null
+    property real gap: Style.space(3)
 
     delay: 400
     padding: 0
-    // H2 fix: below the row (`parent.height + gap`), not the style
-    // default (`-implicitHeight - 3`, above the row) -- see header comment
-    // above. `x` keeps the style's own horizontal centering-on-parent
-    // binding (never part of the reported defect -- only vertical
-    // placement collided with neighboring content).
-    y: parent ? parent.height + Style.space(3) : 0
+    // S20 flip-to-fit -- see header comment above. Deliberately reads
+    // `tip.viewport.contentY` directly (a genuine bindable Flickable
+    // property) rather than relying on `mapToItem`/`mapToGlobal` alone to
+    // pick up scroll changes: `mapToItem`/`mapToGlobal` are plain
+    // synchronous coordinate-transform calls, not bindable properties --
+    // QML's automatic dependency tracker does not treat a call to them as
+    // depending on `contentY`, so a binding that only calls them (with no
+    // *other* changing property read in the same evaluation) silently goes
+    // stale on scroll and never re-fires (measured live in the S20 probe
+    // harness: the true-last-row case never re-evaluated after its initial
+    // below-the-fold layout pass, even though the row's real screen
+    // position moved). Mapping against `viewport.contentItem`
+    // instead gives a scroll-INVARIANT content-space position (row and
+    // contentItem move together, so their relative offset never changes
+    // from scrolling alone), and combining that with the directly-read,
+    // properly-reactive `contentY`/`height` pair is what makes this
+    // binding actually re-run when the Flickable scrolls.
+    y: {
+      var row = tip.rowItem || parent
+      if (!row) return 0
+      var below = row.height + tip.gap
+      var above = -tip.implicitHeight - tip.gap
+      var vp = tip.viewport
+      if (!vp || !vp.contentItem) return below
+      var contentSpaceBottom = row.mapToItem(vp.contentItem, 0, row.height).y
+      var visibleBottom = vp.contentY + vp.height
+      var spaceBelow = visibleBottom - contentSpaceBottom
+      if (spaceBelow >= tip.implicitHeight + tip.gap) return below
+      var contentSpaceTop = row.mapToItem(vp.contentItem, 0, 0).y
+      var spaceAbove = contentSpaceTop - vp.contentY
+      if (spaceAbove >= tip.implicitHeight + tip.gap) return above
+      // Neither direction fully clears the viewport (a degenerate
+      // tiny-viewport/tall-tooltip case) -- below is the lesser evil and
+      // strictly no worse than the v1 fix it replaces.
+      return below
+    }
 
     background: BorderSurface {
       color: Color.tooltip.background
@@ -1093,6 +1165,8 @@ Panel {
       visible: rrArea.containsMouse && root.commentTooltip(rrRow.item) !== ""
       text: root.commentTooltip(rrRow.item)
       fontFamily: root.fontFamily
+      viewport: panelFlick
+      rowItem: rrRow
     }
   }
 
@@ -1208,6 +1282,8 @@ Panel {
       visible: prArea.containsMouse && root.commentTooltip(prRow.item) !== ""
       text: root.commentTooltip(prRow.item)
       fontFamily: root.fontFamily
+      viewport: panelFlick
+      rowItem: prRow
     }
   }
 
@@ -1307,6 +1383,8 @@ Panel {
       visible: issueArea.containsMouse && root.commentTooltip(issueRow.item) !== ""
       text: root.commentTooltip(issueRow.item)
       fontFamily: root.fontFamily
+      viewport: panelFlick
+      rowItem: issueRow
     }
   }
 
@@ -1415,6 +1493,8 @@ Panel {
       visible: repoArea.containsMouse && !!repoRow.item && repoRow.item.lastCommitHeadline !== ""
       text: repoRow.item ? repoRow.item.lastCommitHeadline : ""
       fontFamily: root.fontFamily
+      viewport: panelFlick
+      rowItem: repoRow
     }
   }
 }
