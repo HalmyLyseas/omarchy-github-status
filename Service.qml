@@ -41,8 +41,14 @@ Item {
   readonly property string _notifStatus: internal.notifStatus
   readonly property bool busy: dashboardProc.running || notificationsProc.running
   // Debug-only: lets a probe poll for "every process settled", including
-  // the two that `busy` above deliberately excludes (ghpath/probe).
-  readonly property bool _anyProcRunning: ghPathProc.running || probeProc.running || dashboardProc.running || notificationsProc.running
+  // the three that `busy` above deliberately excludes (ghpath/version/probe).
+  readonly property bool _anyProcRunning: ghPathProc.running || ghVersionProc.running || probeProc.running || dashboardProc.running || notificationsProc.running
+
+  // Read once per gh path resolution (handleGhPathExit). "" until known;
+  // ghVersionSupported stays null until then, so a Panel hint never shows
+  // "untested" before the check has actually run.
+  readonly property string ghVersion: internal.ghVersion
+  readonly property var ghVersionSupported: internal.ghVersion === "" ? null : Model.isGhVersionSupported(internal.ghVersion)
 
   readonly property var notifications: internal.notifications
   readonly property int unreadCount: internal.notifications.filter(function (n) {
@@ -205,6 +211,7 @@ Item {
 
   property string ghPath: ""
   property int ghPathTimeoutMs: 5000
+  property int ghVersionTimeoutMs: 5000
   property int probeTimeoutMs: 30000
   property int dashboardTimeoutMs: 30000
   property int notificationsTimeoutMs: 30000
@@ -227,6 +234,19 @@ Item {
   property int _ghPathArmedPid: 0
   property int _ghPathGen: 0
   property int _ghPathExitedGen: -1
+
+  property var _ghVersionLines: []
+  property var _ghVersionErrorLines: []
+  property int _ghVersionOutputLines: 0
+  property int _ghVersionOutputChars: 0
+  property bool _ghVersionOverflowed: false
+  property int _ghVersionOverflowCount: 0
+  property bool _ghVersionWatchdogFired: false
+  property int _ghVersionWatchdogFiredCount: 0
+  property int _ghVersionFailedStartCount: 0
+  property int _ghVersionArmedPid: 0
+  property int _ghVersionGen: 0
+  property int _ghVersionExitedGen: -1
 
   property var _probeLines: []
   property var _probeErrorLines: []
@@ -269,6 +289,7 @@ Item {
 
   function _procForKind(kind) {
     if (kind === "ghPath") return ghPathProc
+    if (kind === "ghVersion") return ghVersionProc
     if (kind === "probe") return probeProc
     if (kind === "dashboard") return dashboardProc
     return notificationsProc
@@ -276,6 +297,7 @@ Item {
 
   function _watchdogTimer(kind) {
     if (kind === "ghPath") return ghPathWatchdog
+    if (kind === "ghVersion") return ghVersionWatchdog
     if (kind === "probe") return probeWatchdog
     if (kind === "dashboard") return dashWatchdog
     return notifWatchdog
@@ -283,6 +305,7 @@ Item {
 
   function _killTimer(kind) {
     if (kind === "ghPath") return ghPathKillTimer
+    if (kind === "ghVersion") return ghVersionKillTimer
     if (kind === "probe") return probeKillTimer
     if (kind === "dashboard") return dashKillTimer
     return notifKillTimer
@@ -290,6 +313,7 @@ Item {
 
   function _timeoutMsFor(kind) {
     if (kind === "ghPath") return root.ghPathTimeoutMs
+    if (kind === "ghVersion") return root.ghVersionTimeoutMs
     if (kind === "probe") return root.probeTimeoutMs
     if (kind === "dashboard") return root.dashboardTimeoutMs
     return root.notificationsTimeoutMs
@@ -368,6 +392,7 @@ Item {
 
   function _dispatchExit(kind, exitCode, rawOut, rawErr) {
     if (kind === "ghPath") { root.handleGhPathExit(exitCode, rawOut, rawErr); return }
+    if (kind === "ghVersion") { root.handleGhVersionExit(exitCode, rawOut, rawErr); return }
     if (kind === "probe") { root.handleProbeResult(exitCode, rawOut, rawErr); return }
     if (kind === "dashboard") { root.handleDashboardExit(exitCode, rawOut, rawErr); return }
     root.handleNotificationsExit(exitCode, rawOut, rawErr)
@@ -391,6 +416,7 @@ Item {
         root.ghPath = resolved
         log("gh resolved at " + resolved)
         startProbe()
+        triggerGhVersionCheck()
         return
       }
     }
@@ -449,6 +475,71 @@ Item {
     }
   }
 
+  // Read once per gh path resolution -- never gates status/pollers, purely
+  // informational (Panel's "untested version" hint, the `version()` IPC).
+  function triggerGhVersionCheck() {
+    if (ghVersionProc.running) return
+    if (!root.ghPath) return
+    ghVersionProc.command = [root.ghPath, "--version"]
+    _armProcess("ghVersion")
+  }
+
+  function handleGhVersionExit(exitCode, rawOut, rawErr) {
+    if (exitCode !== 0) {
+      log("gh --version failed (exit " + exitCode + ") -- ghVersion stays unknown")
+      return
+    }
+    internal.ghVersion = Model.parseGhVersion(rawOut)
+    log("gh --version: " + (internal.ghVersion || "(unparsed)"))
+  }
+
+  Timer {
+    id: ghVersionWatchdog
+    repeat: false
+    onTriggered: {
+      if (ghVersionProc.running) {
+        root.log("gh --version watchdog: exceeded " + ghVersionWatchdog.interval + "ms, killing")
+        root._ghVersionWatchdogFired = true
+        root._ghVersionWatchdogFiredCount = root._ghVersionWatchdogFiredCount + 1
+        ghVersionProc.signal(15)
+        ghVersionKillTimer.restart()
+      }
+    }
+  }
+
+  Timer {
+    id: ghVersionKillTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (ghVersionProc.running && ghVersionProc.processId === root._ghVersionArmedPid) ghVersionProc.signal(9)
+    }
+  }
+
+  Process {
+    id: ghVersionProc
+    command: []
+    running: false
+    onStarted: { root._ghVersionArmedPid = processId }
+    onRunningChanged: {
+      if (!running) {
+        var gen = root._ghVersionGen
+        Qt.callLater(function () {
+          if (root._ghVersionGen === gen && root._ghVersionExitedGen !== gen) {
+            root._ghVersionExitedGen = gen
+            root._finalizeProcess("ghVersion", 127, 0, true)
+          }
+        })
+      }
+    }
+    stdout: SplitParser { onRead: function (line) { root._appendBoundedOutput("ghVersion", line, false) } }
+    stderr: SplitParser { onRead: function (line) { root._appendBoundedOutput("ghVersion", line, true) } }
+    onExited: function (exitCode, exitStatus) {
+      root._ghVersionExitedGen = root._ghVersionGen
+      root._finalizeProcess("ghVersion", exitCode, exitStatus, false)
+    }
+  }
+
   // Internal state the public API above derives from -- the auth probe,
   // dashboard poller, and notifications poller each own their own
   // status/sync/rate-limit state.
@@ -483,6 +574,10 @@ Item {
     property int myIssuesTotal: 0
 
     property string notificationsEtag: ""
+
+    // "" until the first gh --version check completes (or every attempt
+    // has failed) -- parsed "X.Y.Z", never the raw multi-line output.
+    property string ghVersion: ""
 
     // The authenticated account's own login -- not a secret, GitHub
     // usernames are public. Learned from the probe's stdout, or

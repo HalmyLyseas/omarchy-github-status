@@ -3,6 +3,7 @@
 // Repositories). See docs/developers.md "Architecture"/"Security invariants".
 import QtQuick
 import QtQuick.Controls
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -11,6 +12,10 @@ Panel {
   id: root
   moduleName: "halmylyseas.github-status"
   ipcTarget: "halmylyseas.github-status"
+  // This file declares its own IpcHandler below (adds `version()`), so the
+  // base Panel's inherited open/close/show/hide/toggle handler is disabled
+  // rather than double-registering the same target.
+  manageIpc: false
 
   // Handed over by BarWidget.injectPanel().
   property var anchorItem: null
@@ -149,6 +154,29 @@ Panel {
     if (svc && typeof svc.refresh === "function") svc.refresh()
   }
 
+  // Replaces the base Panel's own open/close/show/hide/toggle handler
+  // (manageIpc: false above) so `version()` can share the same IPC target.
+  IpcHandler {
+    target: root.ipcTarget
+
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+
+    // omarchy-shell halmylyseas.github-status version -> JSON verification
+    // surface: which gh binary is in use, and whether it's a tested major.
+    function version(): string {
+      var s = root.svc
+      return JSON.stringify({
+        ghPath: s ? s.ghPath : "",
+        ghVersion: s ? s.ghVersion : "",
+        ghVersionSupported: s ? s.ghVersionSupported : null
+      })
+    }
+  }
+
   // ------------------------------------------------------------- hero text
 
   function lastSyncLabel() {
@@ -188,10 +216,15 @@ Panel {
       default: base = ""
     }
     // Appended, not replacing, whatever the status ladder above already
-    // says -- a degraded status and a partial fetch can both be true at once.
-    if (!svc.dashboardPartial) return base
-    var partialHint = "Some sections failed to load — showing last-known data for them."
-    return base ? base + " " + partialHint : partialHint
+    // says -- any combination of a degraded status, a partial fetch, and an
+    // untested gh version can be true at once; none of them is severe.
+    var extras = []
+    if (svc.dashboardPartial) extras.push("Some sections failed to load — showing last-known data for them.")
+    if (svc.ghVersionSupported === false) {
+      extras.push("GitHub CLI " + svc.ghVersion + " is untested with this plugin; some data may display incorrectly.")
+    }
+    if (extras.length === 0) return base
+    return base ? base + " " + extras.join(" ") : extras.join(" ")
   }
 
   // ---------------------------------------------------------- CI + review
