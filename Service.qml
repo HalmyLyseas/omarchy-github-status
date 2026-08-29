@@ -69,6 +69,13 @@ Item {
   readonly property var myIssues: Model.filterIssues(internal.myIssues, root.issuesFilter)
   readonly property int myIssuesAllCount: internal.myIssues.length
   readonly property var repos: internal.repos.slice(0, root.repoLimit)
+  // C3: the source's real GraphQL totalCount/issueCount for each section --
+  // 0 until the first successful dashboard fetch lands one, same "not real
+  // yet" default the section arrays themselves start with.
+  readonly property int openPRsTotal: internal.openPRsTotal
+  readonly property int reviewRequestsTotal: internal.reviewRequestsTotal
+  readonly property int reposTotal: internal.reposTotal
+  readonly property int myIssuesTotal: internal.myIssuesTotal
   readonly property bool hasAttention:
     internal.openPRs.some(function (p) { return p && p.ciState === "failure" })
     || internal.reviewRequests.length > 0
@@ -494,6 +501,12 @@ Item {
     property var openPRs: []
     property var repos: []
     property var myIssues: []
+    // C3: paired with the four lists above -- only ever updated together
+    // with the section whose total it is (see handleDashboardExit).
+    property int reviewRequestsTotal: 0
+    property int openPRsTotal: 0
+    property int reposTotal: 0
+    property int myIssuesTotal: 0
 
     property string notificationsEtag: ""
 
@@ -876,10 +889,10 @@ Item {
           rawErr || (parsed && parsed.errors ? briefJson(parsed.errors) : "unparseable/empty JSON"))
         return
       }
-      if (mapped.openPRs !== null) internal.openPRs = mapped.openPRs
-      if (mapped.reviewRequests !== null) internal.reviewRequests = mapped.reviewRequests
-      if (mapped.repos !== null) internal.repos = mapped.repos
-      if (mapped.myIssues !== null) internal.myIssues = mapped.myIssues
+      if (mapped.openPRs !== null) { internal.openPRs = mapped.openPRs; internal.openPRsTotal = mapped.openPRsTotal }
+      if (mapped.reviewRequests !== null) { internal.reviewRequests = mapped.reviewRequests; internal.reviewRequestsTotal = mapped.reviewRequestsTotal }
+      if (mapped.repos !== null) { internal.repos = mapped.repos; internal.reposTotal = mapped.reposTotal }
+      if (mapped.myIssues !== null) { internal.myIssues = mapped.myIssues; internal.myIssuesTotal = mapped.myIssuesTotal }
       _captureLoginFromDashboard(mapped.login)
       internal.dashboardPartial = parsedCount < sections.length
       if (internal.dashboardPartial) {

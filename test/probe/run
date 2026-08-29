@@ -119,6 +119,17 @@ else
   [[ "$(field "$json" reposLength)" == "7" ]] && ok "ok: repos.length===7" || not_ok "ok: repos.length===7 (got $(field "$json" reposLength))"
   [[ "$(field "$json" reviewRequestsLength)" == "0" ]] && ok "ok: reviewRequests.length===0" \
     || not_ok "ok: reviewRequests.length===0 (got $(field "$json" reviewRequestsLength))"
+  # C3: the fixture's totalCount/issueCount are set above each section's own
+  # cap/window (see test/fixtures/mega-graphql.json) -- these must survive
+  # to the public API untouched, paired with the section they describe.
+  [[ "$(field "$json" openPRsTotal)" == "37" ]] && ok "ok: openPRsTotal===37 (exceeds the 20-item window)" \
+    || not_ok "ok: openPRsTotal===37 (got $(field "$json" openPRsTotal))"
+  [[ "$(field "$json" myIssuesTotal)" == "24" ]] && ok "ok: myIssuesTotal===24 (exceeds the 20-item window)" \
+    || not_ok "ok: myIssuesTotal===24 (got $(field "$json" myIssuesTotal))"
+  [[ "$(field "$json" reposTotal)" == "45" ]] && ok "ok: reposTotal===45 (exceeds the 30-item window)" \
+    || not_ok "ok: reposTotal===45 (got $(field "$json" reposTotal))"
+  [[ "$(field "$json" reviewRequestsTotal)" == "14" ]] && ok "ok: reviewRequestsTotal===14 (exceeds the 10-item window)" \
+    || not_ok "ok: reviewRequestsTotal===14 (got $(field "$json" reviewRequestsTotal))"
   [[ "$(field "$json" note)" == "" ]] && ok "ok: no harness-level note/timeout" || not_ok "ok: no harness-level note/timeout (got: $(field "$json" note))"
   etag_sent="$(grep -c 'If-None-Match: "mock-etag-v1"' "$mocklog" 2>/dev/null)"
   [[ "${etag_sent:-0}" -ge 1 ]] && ok "ok: ETag captured and sent on the second notifications poll" \
@@ -287,6 +298,8 @@ else
     || not_ok "partial: dashboardPartial=true (got: $(field "$json" dashboardPartial))"
   [[ "$(field "$json" openPRsLength)" == "1" ]] && ok "partial: openPRs still parsed (1)" \
     || not_ok "partial: openPRs still parsed (got $(field "$json" openPRsLength))"
+  [[ "$(field "$json" openPRsTotal)" == "37" ]] && ok "partial: openPRsTotal still parsed alongside the section (37)" \
+    || not_ok "partial: openPRsTotal still parsed alongside the section (got $(field "$json" openPRsTotal))"
   [[ "$(field "$json" status)" == "ok" ]] && ok "partial: status=ok (partial success is still success)" \
     || not_ok "partial: status=ok (got: $(field "$json" status))"
 fi

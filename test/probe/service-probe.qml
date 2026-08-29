@@ -198,6 +198,13 @@ ShellRoot {
       reviewRequestsLength: (service.reviewRequests || []).length,
       myIssuesLength: (service.myIssues || []).length,
       reposLength: (service.repos || []).length,
+      // C3: the fixture's totalCount/issueCount values are set above every
+      // section's own cap/window, so the "ok" scenario's assertions in
+      // test/probe/run exercise the real "N of T" gap, not a coincidence.
+      openPRsTotal: service.openPRsTotal,
+      reviewRequestsTotal: service.reviewRequestsTotal,
+      myIssuesTotal: service.myIssuesTotal,
+      reposTotal: service.reposTotal,
       rateLimitedUntil: service.rateLimitedUntil,
       dashboardPartial: service.dashboardPartial,
       ghPath: service.ghPath,
