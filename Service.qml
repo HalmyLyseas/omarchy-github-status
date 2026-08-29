@@ -1,121 +1,18 @@
 // Service.qml -- data layer for halmylyseas.github-status.
 //
-// A singleton (per omarchy-shell's `service` kind, exchange/03-shell-api.md
-// §3): instantiated once machine-wide by shell.ensureService(), cached in
-// shell._services[id]. Owns every subprocess, timer, and piece of mutable
-// state; BarWidget.qml/Panel.qml (S3) only ever bind to the read-only
-// properties below and call refresh()/openUrl() -- they own no state of
-// their own (the "split rule", 03-shell-api.md §3).
+// A singleton (manifest kind "service"), instantiated once machine-wide by
+// shell.ensureService(). Owns every subprocess, timer, and piece of mutable
+// state; BarWidget.qml/Panel.qml only ever bind to the read-only properties
+// below and call refresh()/openUrl()/setIssuesFilter().
 //
-// Public API is the frozen contract from exchange/06-design.md's "Service
-// public API" section -- property names/types/semantics are load-bearing
-// for S3, which is coding against them concurrently. See "internal" below
-// for everything that backs it.
-//
-// Security invariants enforced here (exchange/06-design.md "Security
-// invariants", CLAUDE.md hard rules):
-//   - Every `gh` invocation is a read-only GET/graphql `query` (scripts/*,
-//     built by S1, are the only place the actual `gh` command line lives).
-//   - No disk cache, no FileView -- every list below lives in QML memory
-//     only and is lost on shell restart (accepted per 06-design.md).
-//   - Every Process command array is a fixed constant PLUS at most two
-//     variable argv elements: the plugin's own absolute script path
-//     (resolved from this component's own URL, never user/remote input)
-//     and, for fetch-notifications only, the previously-seen ETag (remote-
-//     derived, but passed as a single separate argv element via bash -lc's
-//     "$0"/"$1" positional-parameter mechanism -- never interpolated into
-//     the -lc string itself). See "process command construction" below for
-//     the mechanism and exchange/08-s2-service.md for the live probe that
-//     verified it.
-//   - openUrl() allowlists to Model.isSafeGithubUrl() and always spawns via
-//     Quickshell.execDetached's array form (no shell).
-//
-// S6 fix pass (exchange/14-s6-fixes.md, applying exchange/11-s5a-security-
-// review.md and exchange/12-s5b-correctness-review.md):
-//   - probeProc now has the same 30s watchdog shape as the two pollers
-//     (S5b Finding 1 -- previously a hung `gh api user` inside the auth
-//     probe permanently stuck the service at "loading" with no recovery).
-//   - Per-source health is now tracked internally (probe/dashboard/
-//     notifications), each with its own status/lastSync/rate-limit state.
-//     The public `status`/`lastSyncMs`/`rateLimitedUntil` properties are
-//     *derived* (worst-of / max / whichever source is rate-limited) rather
-//     than being written directly by whichever poller happened to finish
-//     last (S5b Finding 2 -- this used to cause status flapping/masking
-//     between the two independently-cadenced pollers).
-//   - dashboardTimer/notificationsTimer's `interval` is assigned
-//     imperatively at arm time (component completion, each time the timer
-//     starts running, and at the top of each onTriggered), never bound
-//     live to the settings properties (S5b Finding 3 -- a live-bound
-//     interval silently discarded the in-progress countdown on any
-//     settings edit).
-//   - A partial GraphQL envelope (usable `data` for some sections
-//     alongside `errors` for others) now keeps whichever sections parsed
-//     instead of discarding the whole fetch (S5b Finding 4) -- see
-//     Model.mapDashboard's per-section null contract.
-//
-// S8 delta pass (exchange/19-feedback-delta-spec.md, on top of 06-design.md):
-//   - `myIssues` added as a public property, same replace-on-success/
-//     keep-last-good-on-failure lifecycle as `openPRs` (F3).
-//   - `repos` gained a read-time sort (`repoSort`/`setRepoSort`, F1);
-//     that sort feature was removed again by the v1.3 H3 pass
-//     (exchange/33) -- `repos` now renders in raw query order
-//     (PUSHED_AT desc) sliced by repoLimit. Settings writes still go
-//     through Model.mergedSettings (see its header comment for the
-//     "updateEntryInline replaces the whole entry" trap), never a raw
-//     single-key write.
-//   - probe-auth's stdout (the authenticated login, not a secret) is now
-//     captured into `internal.login` and threaded into
-//     Model.mapNotifications so notification rows can derive `isExternal`/
-//     `owner` (F6) -- the REST notifications payload has no `viewer`-shaped
-//     field to read a login from itself.
-//
-// S13 delta pass (exchange/26-feedback2-delta-spec.md, on top of the S8/S12
-// passes above):
-//   - G2: `comments(last: 1)` added to openPRs/myIssues/reviewRequests nodes
-//     -- Model.mapOpenPRs/mapReviewRequests/mapMyIssues now also produce
-//     `lastCommenter`/`lastCommentAt` per row (Model.lastComment()).
-//   - G4: `myIssues` is now Model.filterIssues(internal.myIssues,
-//     issuesFilter) -- filtered at READ time, same "sort/slice at read time,
-//     store raw at fetch time" shape repos already uses for repoSort/
-//     repoLimit (see the S8 note above). `issuesFilter`/`setIssuesFilter()`
-//     are new public API, mirroring `repoSort`/`setRepoSort()` exactly
-//     (validation, mergedSettings persistence, immediate apply via the same
-//     live-binding-over-_settingsEntry mechanism). `myIssuesAllCount`
-//     exposes the pre-filter length so the UI can show "Focus (3) / All
-//     (9)"-style affordances.
-//
-// S12 fix pass (exchange/23-s11-delta-review.md, applying the PM's binding
-// fix decisions in exchange/24-s12-release.md):
-//   - F1: `dashboardLastSyncMs`/`notificationsLastSyncMs` added as public,
-//     per-source sync markers (`lastSyncMs` above stays the blended one, for
-//     the hero only) -- Panel.qml gates each SectionHeader's "…"-vs-
-//     confirmed-"0" pill on the ONE source that actually backs that
-//     section, not the two independently-timed pollers' Math.max.
-//   - F2: `internal.login` can now be learned two ways instead of one --
-//     (a) opportunistically off any dashboard response's own viewer.login
-//     (handleDashboardExit), (b) reProbeTimer is kept alive
-//     (maybeRearmReProbeForLogin) after a non-auth probe failure/watchdog
-//     timeout specifically to keep retrying login capture, decoupled from
-//     whether the pollers are already running.
-//   - F3: accepted as a note, not fixed -- see docs/developers.md's
-//     "Accepted risks".
-//
-// S18 delta pass (exchange/33-feedback3-delta-spec.md, H1/H3 -- H2 was a
-// Panel.qml-only fix, see that file's own header comment):
-//   - H3: `repoSort`/`setRepoSort()` and the read-time
-//     `Model.sortRepos(internal.repos, repoSort)` call are REMOVED --
-//     `repos` (below) is now a plain slice of `internal.repos` (itself
-//     always in raw query order, GraphQL PUSHED_AT desc) by `repoLimit`,
-//     no sort layer left. A `repoSort` key surviving in an existing user's
-//     shell.json entry (pre-1.3) is harmless: nothing here reads it
-//     anymore, and Model.mergedSettings's "current entry plus one changed
-//     key" merge shape (still used by setIssuesFilter) preserves whatever
-//     stale keys are already present rather than stripping them -- see
-//     docs/developers.md.
-//   - H1: `issuesFilter`/`setIssuesFilter()` themselves are UNCHANGED --
-//     H1 only reshaped Panel.qml's Focus/All ButtonGroup into a single
-//     "Subscribed" toggle chip; this file's contract and persistence
-//     shape are exactly what S13 shipped.
+// Every `gh` invocation is a direct Quickshell Process child (never a shell
+// wrapper) -- see CLAUDE.md hard rules and docs/developers.md "Process
+// contract". `gh` is mise-installed, not on Quickshell's own PATH, so its
+// absolute path is resolved once via a single `bash -lc "command -v gh"`
+// call (the only shell invocation anywhere in this file); every fetch after
+// that spawns `gh` itself as a fixed argv array plus at most the ETag as a
+// separate, sanitised element -- never interpolated into a shell string.
+// No disk cache: every list below lives in QML memory only.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -125,43 +22,43 @@ Item {
   id: root
 
   // ------------------------------------------------ injected by the shell
-  // shell.ensureService() (shell.qml:283-321) injects whichever of these
-  // properties exist on the root Item after createObject(); declare only
-  // the ones this service actually consults.
   property var shell: null
   property var manifest: null
 
   // ============================================================
-  // Service public API -- exchange/06-design.md, frozen contract. Every
-  // property here is DERIVED from the per-source state in `internal` below
-  // -- none of them are assigned directly (see "Status state machine").
+  // Service public API. Every property here is DERIVED from the per-source
+  // state in `internal` below -- none are assigned directly.
   // ============================================================
 
   // "ok" | "loading" | "no-gh" | "unauthenticated" | "offline" | "rate-limited"
   readonly property string status: computeStatus()
-  // Bumped by ANY source's success, including a notifications 304 --
-  // 06-design.md's contract is "last time we successfully synced with
-  // GitHub", not "last time a specific poller succeeded". Used for the
-  // panel's hero "Synced Xm ago" line -- NOT for per-section "…"-vs-
-  // confirmed-"0" pill gating (see the two per-source properties below;
-  // exchange/23-s11-delta-review.md F1).
+  // "last time we successfully synced with GitHub" -- bumped by any
+  // source's success, including a notifications 304.
   readonly property double lastSyncMs: Math.max(internal.dashboardLastSyncMs, internal.notifLastSyncMs)
-  // exchange/23-s11-delta-review.md F1: per-source sync markers, exposed
-  // publicly so Panel.qml can gate each SectionHeader's "…"-vs-confirmed-"0"
-  // pill on the ONE source that actually backs that section, instead of the
-  // blended `lastSyncMs` above. Both pollers fire on essentially every cold
-  // start in the same JS tick (`triggeredOnStart: true` on both timers,
-  // below) and race independently -- gating all five sections on whichever
-  // one happens to finish first meant up to four sections could show a
-  // false confirmed-"0" (their own backing arrays still at the untouched
-  // `[]` startup default) the moment the OTHER poller's fetch won the race.
-  // Inbox is the only section backed by the notifications poller; Review
-  // requests/My PRs/My issues/Repo activity are all backed by the single
-  // combined dashboard fetch.
+  // Per-source sync markers so Panel.qml can gate each SectionHeader's
+  // "..."-vs-confirmed-"0" pill on the one source that actually backs it.
   readonly property double dashboardLastSyncMs: internal.dashboardLastSyncMs
   readonly property double notificationsLastSyncMs: internal.notifLastSyncMs
+  // C2: set when the last-applied dashboard fetch parsed SOME but not ALL
+  // sections (a partial GraphQL envelope) -- surfaced for the panel's
+  // "Synced * partial" hero line; the data itself is still whatever parsed.
+  readonly property bool dashboardPartial: internal.dashboardPartial
   readonly property string rateLimitedUntil: pickRateLimitedUntil()
+  // Debug-only: raw epoch-ms companions to rateLimitedUntil's formatted
+  // string, so a probe can poll "has the window actually passed" precisely.
+  readonly property double _dashboardRateLimitedUntilMs: internal.dashboardRateLimitedUntilMs
+  readonly property double _notificationsRateLimitedUntilMs: internal.notifRateLimitedUntilMs
+  // Debug-only: per-source status strings, so a probe can tell one source
+  // recovered even while the OTHER is still blocked (e.g. dashboard's own
+  // rate-limit reset has no header to parse in real `gh` output, so it
+  // always falls back to a +60min window -- only notifications' -i output
+  // carries a real X-Ratelimit-Reset).
+  readonly property string _dashboardStatus: internal.dashboardStatus
+  readonly property string _notifStatus: internal.notifStatus
   readonly property bool busy: dashboardProc.running || notificationsProc.running
+  // Debug-only: lets a probe poll for "every process settled", including
+  // the two that `busy` above deliberately excludes (ghpath/probe).
+  readonly property bool _anyProcRunning: ghPathProc.running || probeProc.running || dashboardProc.running || notificationsProc.running
 
   readonly property var notifications: internal.notifications
   readonly property int unreadCount: internal.notifications.filter(function (n) {
@@ -169,43 +66,22 @@ Item {
   }).length
   readonly property var reviewRequests: internal.reviewRequests
   readonly property var openPRs: internal.openPRs
-  // exchange/19-feedback-delta-spec.md F3: same lifecycle/state handling as
-  // openPRs -- per-source (well, per-dashboard-fetch) replace on success via
-  // Model.mapDashboard's null-vs-[] contract, keep-last-good on failure.
-  // exchange/26-feedback2-delta-spec.md G4: filtered per `issuesFilter` at
-  // READ time (same "raw at fetch time, derived at read time" split repos
-  // below uses for repoLimit) -- a live issuesFilter change re-filters
-  // instantly with no new fetch. internal.myIssues itself always holds the
-  // full, unfiltered last-good list.
   readonly property var myIssues: Model.filterIssues(internal.myIssues, root.issuesFilter)
-  // G4: pre-filter count, so the UI can show "Focus (3) / All (9)"-style
-  // affordances without needing internal.myIssues directly.
   readonly property int myIssuesAllCount: internal.myIssues.length
-  // exchange/33-feedback3-delta-spec.md H3: sliced by repoLimit (a setting,
-  // min 3/max 30) only -- the F1 sort layer (Model.sortRepos/repoSort) is
-  // removed; internal.repos is always stored in raw query order (GraphQL
-  // PUSHED_AT desc, scripts/fetch-dashboard's own ORDER BY), and repoLimit
-  // is applied here on top of Model.js's own fixed CAP_REPOS=30 -- see
-  // "Settings" below.
   readonly property var repos: internal.repos.slice(0, root.repoLimit)
   readonly property bool hasAttention:
     internal.openPRs.some(function (p) { return p && p.ciState === "failure" })
     || internal.reviewRequests.length > 0
 
-  // Manual refresh: runs both fetches now. No-op while a fetch from either
-  // poller is already in flight (03-shell-api.md §6 re-entrancy rule) --
-  // the individual trigger functions also self-guard, so this is belt and
-  // suspenders, not the only guard.
+  // Runs both fetches now; a no-op while either is already in flight. While
+  // blocked on no-gh, re-resolves ghPath immediately instead of waiting out
+  // the 5-minute re-probe.
   function refresh() {
-    // Deliberately checks the two Process.running values directly rather
-    // than the cached `busy` property above: measured live against this
-    // Quickshell version (0.3.1) that a computed `readonly property bool
-    // busy: a || b` does not always re-evaluate synchronously within the
-    // same JS call stack that flips `a`/`b` (it lags to the next event-loop
-    // turn in some cases) -- see exchange/08-s2-service.md for the probe
-    // that caught this. Reading the two Process.running values directly is
-    // always accurate the instant they're set, so the no-op guard here
-    // uses those, not the property a caller outside this file would read.
+    if (root.status === "no-gh") {
+      log("refresh(): no-gh -- re-resolving gh path immediately")
+      forceResolveGhPath()
+      return
+    }
     if (dashboardProc.running || notificationsProc.running) {
       log("refresh() requested but already busy -- ignored")
       return
@@ -215,10 +91,8 @@ Item {
     triggerNotificationsFetch()
   }
 
-  // Validates against Model.isSafeGithubUrl (anchored to https://github.com/)
-  // before spawning xdg-open as an argument array -- never a shell string,
-  // so there is no injection surface even though `url` is remote-derived
-  // (a notification/PR/repo URL built by Model.js's mappers).
+  // Allowlisted to https://github.com/... and spawned as an argument array
+  // (no shell) -- url is remote-derived (a notification/PR/repo link).
   function openUrl(url) {
     if (!Model.isSafeGithubUrl(url)) {
       log("openUrl: rejected non-github.com url")
@@ -227,19 +101,9 @@ Item {
     Quickshell.execDetached(["xdg-open", url])
   }
 
-  // G4 (exchange/26-feedback2-delta-spec.md): validates `mode` (anything
-  // other than exactly "all" becomes "focus"), then persists it via
-  // shell.updateEntryInline -- trap 10 (see Model.mergedSettings's own
-  // header comment): that host call REPLACES the whole settings entry with
-  // whatever keys it's handed, so this always builds the FULL next-state
-  // object (current settings entry + the one changed key) rather than a
-  // bare `{issuesFilter: mode}`, or every other persisted setting
-  // (dashboardIntervalSec, notificationsIntervalSec, repoLimit) would be
-  // silently dropped on every toggle. "Applies immediately":
-  // `root.issuesFilter` below is a live binding over
-  // `_settingsEntry`/`shellConfig`, so `myIssues` (filtered at read time,
-  // above) re-evaluates the instant updateEntryInline reassigns
-  // shell.shellConfig -- no separate internal state to keep in sync.
+  // Persists issuesFilter via shell.updateEntryInline, which REPLACES the
+  // whole settings entry -- Model.mergedSettings builds current-plus-one-key
+  // so every other setting survives the write.
   function setIssuesFilter(mode) {
     var next = validIssuesFilter(mode)
     if (!shell || typeof shell.updateEntryInline !== "function") {
@@ -252,16 +116,9 @@ Item {
 
   // ============================================================
   // Settings: shell.json entry for this plugin, manifest defaults as
-  // fallback. Plain readonly bindings off shell.shellConfig (itself a live
-  // QML property on the shell root, not a snapshot) -- reassigning
-  // shellConfig anywhere upstream (mutateShellConfig, updateEntryInline,
-  // config reload) re-evaluates every property below automatically. This
-  // is the same "just bind, don't subscribe" pattern Ristretto's
-  // Service.qml uses for sleepSeconds/dryRun (Service.qml:31-34).
-  //
-  // NOTE: this is the settings *value* itself, which is fine to keep live
-  // -- what must NOT be a live binding is a Timer.interval built from it
-  // (see dashboardTimer/notificationsTimer below, S5b Finding 3).
+  // fallback. Live bindings off shell.shellConfig -- fine to keep live;
+  // what must NOT be a live binding is a Timer.interval built from one of
+  // these (see dashboardTimer/notificationsTimer below).
   // ============================================================
 
   readonly property var _shellConfig: shell ? shell.shellConfig : null
@@ -273,28 +130,20 @@ Item {
     clampInt(settingInt(_settingsEntry, "notificationsIntervalSec", manifestDefault("notificationsIntervalSec", 60)), 60, 600)
   readonly property int repoLimit:
     clampInt(settingInt(_settingsEntry, "repoLimit", manifestDefault("repoLimit", 10)), 3, 30)
-  // G4: "focus" (default) or "all" -- validIssuesFilter() is the single
-  // point that decides what counts as a legal value, so a hand-edited (or
-  // stale) shell.json entry with a garbage/missing issuesFilter value falls
-  // back to "focus" rather than crashing or showing an undefined mode.
   readonly property string issuesFilter:
     validIssuesFilter(settingStr(_settingsEntry, "issuesFilter", manifestDefault("issuesFilter", "focus")))
 
-  // shell.json's bar-layout entries can be a bare string ("halmylyseas.
-  // github-status") instead of an object ({id: "..."}) -- that form
-  // renders fine but cannot carry settings at all (updateEntryInline only
-  // matches object entries, 03-shell-api.md §11). Delayed so shellConfig
-  // has time to move past its transient built-in-defaults state at boot
-  // (Ristretto's Service.qml:370-379 precedent, same 15s delay).
+  // A bar-layout entry can be a bare string instead of an object -- that
+  // form renders fine but cannot carry settings (updateEntryInline only
+  // matches object entries). Delayed so shellConfig has time to move past
+  // its transient built-in-defaults state at boot.
   Timer {
     interval: 15000
     running: true
     repeat: false
     onTriggered: {
       if (root.findEntry(root._shellConfig, "halmylyseas.github-status") === null) {
-        root.log("no config entry found for this plugin -- settings cannot persist, " +
-            "manifest defaults are in effect (a string-form bar-layout entry has " +
-            "this effect; it must be an object with an id key to hold settings)")
+        root.log("no config entry found for this plugin -- settings cannot persist, manifest defaults are in effect")
       }
     }
   }
@@ -350,10 +199,7 @@ Item {
   }
 
   // ============================================================
-  // Plugin-dir resolution: the one and only place any script path is
-  // computed. Never remote/user input -- Qt.resolvedUrl(".") resolves
-  // against THIS component's own file:// URL, which is fixed at install
-  // time (the plugin's own directory).
+  // Plugin-dir resolution -- never remote/user input, fixed at install time.
   // ============================================================
 
   readonly property string pluginDir: resolvePluginDir()
@@ -367,15 +213,263 @@ Item {
   }
 
   // ============================================================
+  // gh path resolution + per-process plumbing. `ghPath` is resolved once at
+  // startup (deferred one tick so a test harness can override it first);
+  // tests/probes set `ghPath` directly instead (a PATH-shadowed mock's
+  // absolute path is also fine). Every *TimeoutMs/output-cap property below
+  // is plain (not readonly) so a probe can shorten it.
+  // ============================================================
+
+  property string ghPath: ""
+  property int ghPathTimeoutMs: 5000
+  property int probeTimeoutMs: 30000
+  property int dashboardTimeoutMs: 30000
+  property int notificationsTimeoutMs: 30000
+  // Generic per-process caps (probe/notifications/ghpath); dashboard's own
+  // response is one JSON line, so it gets a much larger char budget instead
+  // of a line-count budget.
+  property int finiteOutputLines: 20000
+  property int finiteOutputChars: 262144
+  property int dashboardOutputCharsCap: 2097152
+
+  property var _ghPathLines: []
+  property var _ghPathErrorLines: []
+  property int _ghPathOutputLines: 0
+  property int _ghPathOutputChars: 0
+  property bool _ghPathOverflowed: false
+  property int _ghPathOverflowCount: 0
+  property bool _ghPathWatchdogFired: false
+  property int _ghPathWatchdogFiredCount: 0
+  property int _ghPathFailedStartCount: 0
+  property int _ghPathArmedPid: 0
+  property int _ghPathGen: 0
+  property int _ghPathExitedGen: -1
+
+  property var _probeLines: []
+  property var _probeErrorLines: []
+  property int _probeOutputLines: 0
+  property int _probeOutputChars: 0
+  property bool _probeOverflowed: false
+  property int _probeOverflowCount: 0
+  property bool _probeWatchdogFired: false
+  property int _probeWatchdogFiredCount: 0
+  property int _probeFailedStartCount: 0
+  property int _probeArmedPid: 0
+  property int _probeGen: 0
+  property int _probeExitedGen: -1
+
+  property var _dashboardLines: []
+  property var _dashboardErrorLines: []
+  property int _dashboardOutputLines: 0
+  property int _dashboardOutputChars: 0
+  property bool _dashboardOverflowed: false
+  property int _dashboardOverflowCount: 0
+  property bool _dashboardWatchdogFired: false
+  property int _dashboardWatchdogFiredCount: 0
+  property int _dashboardFailedStartCount: 0
+  property int _dashboardArmedPid: 0
+  property int _dashboardGen: 0
+  property int _dashboardExitedGen: -1
+
+  property var _notificationsLines: []
+  property var _notificationsErrorLines: []
+  property int _notificationsOutputLines: 0
+  property int _notificationsOutputChars: 0
+  property bool _notificationsOverflowed: false
+  property int _notificationsOverflowCount: 0
+  property bool _notificationsWatchdogFired: false
+  property int _notificationsWatchdogFiredCount: 0
+  property int _notificationsFailedStartCount: 0
+  property int _notificationsArmedPid: 0
+  property int _notificationsGen: 0
+  property int _notificationsExitedGen: -1
+
+  function _procForKind(kind) {
+    if (kind === "ghPath") return ghPathProc
+    if (kind === "probe") return probeProc
+    if (kind === "dashboard") return dashboardProc
+    return notificationsProc
+  }
+
+  function _watchdogTimer(kind) {
+    if (kind === "ghPath") return ghPathWatchdog
+    if (kind === "probe") return probeWatchdog
+    if (kind === "dashboard") return dashWatchdog
+    return notifWatchdog
+  }
+
+  function _killTimer(kind) {
+    if (kind === "ghPath") return ghPathKillTimer
+    if (kind === "probe") return probeKillTimer
+    if (kind === "dashboard") return dashKillTimer
+    return notifKillTimer
+  }
+
+  function _timeoutMsFor(kind) {
+    if (kind === "ghPath") return root.ghPathTimeoutMs
+    if (kind === "probe") return root.probeTimeoutMs
+    if (kind === "dashboard") return root.dashboardTimeoutMs
+    return root.notificationsTimeoutMs
+  }
+
+  function _capCharsFor(kind) {
+    return kind === "dashboard" ? root.dashboardOutputCharsCap : root.finiteOutputChars
+  }
+
+  function _resetBoundedOutput(kind) {
+    root["_" + kind + "Lines"] = []
+    root["_" + kind + "ErrorLines"] = []
+    root["_" + kind + "OutputLines"] = 0
+    root["_" + kind + "OutputChars"] = 0
+    root["_" + kind + "Overflowed"] = false
+  }
+
+  // Arrays are always replaced (never .push()ed) so bindings notice. A
+  // breach caps the total at the limit and SIGTERMs the process (C7/A3).
+  function _appendBoundedOutput(kind, line, errorStream) {
+    if (root["_" + kind + "Overflowed"]) return
+    var outLinesKey = "_" + kind + "OutputLines"
+    var outCharsKey = "_" + kind + "OutputChars"
+    var charsCap = _capCharsFor(kind)
+    var atCap = root[outLinesKey] >= root.finiteOutputLines || root[outCharsKey] >= charsCap
+    if (!atCap) {
+      var value = String(line || "")
+      var remaining = charsCap - root[outCharsKey]
+      if (value.length >= remaining) { value = value.slice(0, remaining); atCap = true }
+      var linesKey = errorStream ? "_" + kind + "ErrorLines" : "_" + kind + "Lines"
+      root[linesKey] = root[linesKey].concat([value])
+      root[outLinesKey] = root[outLinesKey] + 1
+      root[outCharsKey] = root[outCharsKey] + value.length
+      if (root[outLinesKey] >= root.finiteOutputLines) atCap = true
+    }
+    if (atCap) {
+      root["_" + kind + "Overflowed"] = true
+      root["_" + kind + "OverflowCount"] = root["_" + kind + "OverflowCount"] + 1
+      var proc = _procForKind(kind)
+      if (proc.running) proc.signal(15)
+    }
+  }
+
+  function _armProcess(kind) {
+    root["_" + kind + "Gen"] = root["_" + kind + "Gen"] + 1
+    _resetBoundedOutput(kind)
+    var wd = _watchdogTimer(kind)
+    wd.interval = _timeoutMsFor(kind)
+    wd.restart()
+    _procForKind(kind).running = true
+  }
+
+  // Shared by every process's real onExited and its synthetic failed-start
+  // path. exitStatus === 1 (killed by signal) folds into a nonzero exit
+  // code regardless of exitCode, so a signalled child never reads as success.
+  function _finalizeProcess(kind, exitCode, exitStatus, missingBinary) {
+    _watchdogTimer(kind).stop()
+    _killTimer(kind).stop()
+    var effExitCode, rawOut, rawErr
+    if (missingBinary) {
+      root["_" + kind + "FailedStartCount"] = root["_" + kind + "FailedStartCount"] + 1
+      effExitCode = 127; rawOut = ""; rawErr = "gh binary missing (removed?)"
+    } else if (root["_" + kind + "WatchdogFired"]) {
+      root["_" + kind + "WatchdogFired"] = false
+      effExitCode = 124; rawOut = ""; rawErr = "timed out"
+    } else if (root["_" + kind + "Overflowed"]) {
+      effExitCode = 137; rawOut = ""; rawErr = "output limit exceeded"
+    } else {
+      rawOut = root["_" + kind + "Lines"].join("\n")
+      rawErr = root["_" + kind + "ErrorLines"].join("\n")
+      effExitCode = (exitStatus === 1 && exitCode === 0) ? 1 : exitCode
+    }
+    _resetBoundedOutput(kind)
+    _dispatchExit(kind, effExitCode, rawOut, rawErr)
+  }
+
+  function _dispatchExit(kind, exitCode, rawOut, rawErr) {
+    if (kind === "ghPath") { root.handleGhPathExit(exitCode, rawOut, rawErr); return }
+    if (kind === "probe") { root.handleProbeResult(exitCode, rawOut, rawErr); return }
+    if (kind === "dashboard") { root.handleDashboardExit(exitCode, rawOut, rawErr); return }
+    root.handleNotificationsExit(exitCode, rawOut, rawErr)
+  }
+
+  function resolveGhPath() {
+    if (root.ghPath) { startProbe(); return }
+    forceResolveGhPath()
+  }
+
+  function forceResolveGhPath() {
+    if (ghPathProc.running) return
+    ghPathProc.command = ["bash", "-lc", "command -v gh"]
+    _armProcess("ghPath")
+  }
+
+  function handleGhPathExit(exitCode, rawOut, rawErr) {
+    if (exitCode === 0) {
+      var resolved = String(rawOut || "").split("\n")[0].replace(/^\s+|\s+$/g, "")
+      if (resolved) {
+        root.ghPath = resolved
+        log("gh resolved at " + resolved)
+        startProbe()
+        return
+      }
+    }
+    log("gh not found on PATH: " + (rawErr || "empty result"))
+    setProbeStatus("no-gh")
+    reProbeTimer.restart()
+  }
+
+  Timer {
+    id: ghPathWatchdog
+    repeat: false
+    onTriggered: {
+      if (ghPathProc.running) {
+        root.log("gh path resolution watchdog: exceeded " + ghPathWatchdog.interval + "ms, killing")
+        root._ghPathWatchdogFired = true
+        root._ghPathWatchdogFiredCount = root._ghPathWatchdogFiredCount + 1
+        ghPathProc.signal(15)
+        ghPathKillTimer.restart()
+      }
+    }
+  }
+
+  Timer {
+    id: ghPathKillTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (ghPathProc.running && ghPathProc.processId === root._ghPathArmedPid) ghPathProc.signal(9)
+    }
+  }
+
+  Process {
+    id: ghPathProc
+    command: []
+    running: false
+    onStarted: { root._ghPathArmedPid = processId }
+    // A Process whose binary can't be found flips `running` false without
+    // ever emitting `exited` -- Qt.callLater defers this check so a normal
+    // exit's own synchronous `exited` handler runs first.
+    onRunningChanged: {
+      if (!running) {
+        var gen = root._ghPathGen
+        Qt.callLater(function () {
+          if (root._ghPathGen === gen && root._ghPathExitedGen !== gen) {
+            root._ghPathExitedGen = gen
+            root._finalizeProcess("ghPath", 127, 0, true)
+          }
+        })
+      }
+    }
+    stdout: SplitParser { onRead: function (line) { root._appendBoundedOutput("ghPath", line, false) } }
+    stderr: SplitParser { onRead: function (line) { root._appendBoundedOutput("ghPath", line, true) } }
+    onExited: function (exitCode, exitStatus) {
+      root._ghPathExitedGen = root._ghPathGen
+      root._finalizeProcess("ghPath", exitCode, exitStatus, false)
+    }
+  }
+
+  // ============================================================
   // Internal state -- everything the public API above is derived from.
-  // Kept in one QtObject so it reads unambiguously as "not part of the
-  // contract" next to the readonly properties above.
-  //
-  // Per-source tracking (S5b Finding 2): the auth probe, the dashboard
-  // poller, and the notifications poller each own their own status/sync/
-  // rate-limit state. Nothing here is touched by more than one of
-  // handleProbeResult/handleDashboardExit/handleNotificationsExit (plus
-  // their matching watchdogs).
+  // Per-source tracking: the auth probe, the dashboard poller, and the
+  // notifications poller each own their own status/sync/rate-limit state.
   // ============================================================
 
   QtObject {
@@ -386,6 +480,7 @@ Item {
 
     property double dashboardLastSyncMs: 0
     property double notifLastSyncMs: 0
+    property bool dashboardPartial: false
 
     property double dashboardRateLimitedUntilMs: 0
     property string dashboardRateLimitedUntil: ""
@@ -402,38 +497,17 @@ Item {
 
     property string notificationsEtag: ""
 
-    // The authenticated account's own login, learned once from
-    // scripts/probe-auth's stdout on a successful probe (exchange/19-
-    // feedback-delta-spec.md F6). Not a secret -- GitHub usernames are
-    // public, same rationale probe-auth's own header comment gives for
-    // printing it at all. Threaded into Model.mapNotifications (the REST
-    // notifications payload has no `viewer`-shaped field to read a login
-    // from, unlike the GraphQL dashboard envelope, which carries its own
-    // `viewer.login` end to end through Model.mapDashboard already).
+    // The authenticated account's own login -- not a secret, GitHub
+    // usernames are public. Learned from the probe's stdout, or
+    // opportunistically off a dashboard response's viewer.login.
     property string login: ""
 
-    // Gate on the two pollers below. False at startup and while the
-    // service does not yet have a *resolved* auth signal, or has lost one
-    // mid-session (06-design.md: "Slow re-probe (5 min) in the first two
-    // states; no fast retry loops" / "normal pollers stopped"). Once true,
-    // stays true unless the OVERALL derived status becomes no-gh/
-    // unauthenticated again (see the root Item's onStatusChanged below) --
-    // offline/rate-limited never touch this flag, matching the original
-    // ladder ("keep polling on the normal cadence" for both).
+    // Gate on the two pollers. False at startup and while the service has
+    // no resolved auth signal, or has lost one mid-session. Stays true
+    // unless the derived status becomes no-gh/unauthenticated again.
     property bool pollersActive: false
 
-    // Tracks the last value `status` was logged at, so the onStatusChanged
-    // handler below can log "X -> Y" without needing the change signal to
-    // carry the previous value itself.
     property string lastLoggedStatus: "loading"
-
-    // Set true by a watchdog immediately before it force-stops a hung
-    // Process; the resulting onExited is then a kill artifact, not a real
-    // response, so the exit handler skips re-processing it (the watchdog
-    // itself already called the failure handler once, synchronously).
-    property bool dashWatchdogFired: false
-    property bool notifWatchdogFired: false
-    property bool probeWatchdogFired: false
   }
 
   // ============================================================
@@ -444,11 +518,8 @@ Item {
     console.log("qml: github-status " + message)
   }
 
-  // Severity ladder, most severe first (exchange/12-s5b-correctness-
-  // review.md F2's exact ordering). worstOf picks whichever of the two
-  // inputs is more severe (lower index); an unrecognized string is treated
-  // as "loading" (a status this file never actually assigns is not worth
-  // crashing over).
+  // Severity ladder, most severe first. worstOf picks whichever input is
+  // more severe; an unrecognized string is treated as "loading".
   function worstOf(a, b) {
     var order = ["no-gh", "unauthenticated", "rate-limited", "offline", "loading", "ok"]
     var ai = order.indexOf(a); if (ai < 0) ai = order.indexOf("loading")
@@ -456,18 +527,9 @@ Item {
     return ai <= bi ? a : b
   }
 
-  // The public `status` is the worst-of across whichever sources currently
-  // matter. Deliberately excludes probeStatus once the pollers are engaged
-  // (internal.pollersActive === true): the probe's only job is the initial
-  // "is gh even usable" gate, run once (plus on every re-probe while
-  // blocked). Without this exclusion, a single probe result classified as
-  // e.g. "offline" (the F1 watchdog fix, when `gh api user` hangs) would
-  // permanently drag the overall status down even after both real pollers
-  // go on to succeed -- see exchange/14-s6-fixes.md for the reasoning.
-  // Once pollers are active, the real, continuously-refreshed signal is
-  // whatever the dashboard/notifications pollers themselves report, which
-  // will independently re-discover no-gh/unauthenticated/rate-limited/
-  // offline for real if any of those conditions actually recur.
+  // Excludes probeStatus once the pollers are engaged -- the probe's only
+  // job is the initial "is gh even usable" gate. Once pollers are active,
+  // the real signal is whatever they themselves report.
   function computeStatus() {
     if (!internal.pollersActive) {
       return worstOf(worstOf(internal.probeStatus, internal.dashboardStatus), internal.notifStatus)
@@ -475,10 +537,8 @@ Item {
     return worstOf(internal.dashboardStatus, internal.notifStatus)
   }
 
-  // rateLimitedUntil only ever reflects a source that is CURRENTLY
-  // rate-limited (never a stale value left over from a source that has
-  // since recovered) -- if more than one source happens to be rate-limited
-  // at once, show whichever resets soonest.
+  // Never a stale value left over from a source that has since recovered --
+  // if more than one source is rate-limited, show whichever resets soonest.
   function pickRateLimitedUntil() {
     var candidates = []
     if (internal.dashboardStatus === "rate-limited") {
@@ -495,11 +555,8 @@ Item {
     return candidates[0].until
   }
 
-  // The one place the derived `status` is observed and acted on: logs
-  // every real transition, and stops both pollers + arms the re-probe
-  // cycle whenever the WORST current source is no-gh/unauthenticated --
-  // whether that came from the initial probe or from a poller discovering
-  // it mid-session (e.g. a token revoked while already running).
+  // Logs every real transition; stops both pollers + arms the re-probe
+  // cycle whenever the worst current source is no-gh/unauthenticated.
   onStatusChanged: {
     log("status: " + internal.lastLoggedStatus + " -> " + status)
     internal.lastLoggedStatus = status
@@ -513,17 +570,6 @@ Item {
   function setDashboardStatus(s) { internal.dashboardStatus = s }
   function setNotifStatus(s) { internal.notifStatus = s }
 
-  // cls is one of Model.classifyFailure's tags: "no-gh" | "http-304" |
-  // "unauthenticated" | "rate-limited" | "offline" | "error". "http-304"
-  // is handled by callers before this is reached (it's success, not
-  // failure). "error" (an unclassified failure -- classifyFailure's own
-  // fallback bucket) is deliberately mapped to "offline" rather than left
-  // unmapped: the Service API's status enum has no "error" member, and
-  // treating an unrecognized failure shape as an outage (keep last-good
-  // data, keep retrying on the normal cadence) fails safer than either
-  // silently doing nothing or freezing polling on a state with no defined
-  // recovery path. Flagged as a deliberate mapping, not a spec gap, in
-  // exchange/08-s2-service.md.
   function mapClassifiedStatus(cls) {
     switch (cls) {
       case "no-gh": return "no-gh"
@@ -535,15 +581,13 @@ Item {
   }
 
   // source is "probe" | "dashboard" | "notifications". Records the
-  // rate-limit reset time (if this classifies as rate-limited) against
-  // ONLY that source, then updates that source's own status -- a
-  // rate-limited dashboard poller never touches the notifications poller's
-  // state or vice versa (S5b Finding 2's "pause only the affected poller").
+  // rate-limit reset (if applicable) against only that source, then
+  // updates that source's own status.
   function handleFetchFailure(source, cls, rawText) {
     var mapped = mapClassifiedStatus(cls)
     if (mapped === "rate-limited") {
       var untilMs = parseRateLimitReset(rawText)
-      if (!untilMs) untilMs = Date.now() + 60 * 60 * 1000  // fallback: +60min
+      if (!untilMs) untilMs = Date.now() + 60 * 60 * 1000
       var label = formatHHMM(untilMs)
       if (source === "dashboard") {
         internal.dashboardRateLimitedUntilMs = untilMs
@@ -562,9 +606,6 @@ Item {
     else if (source === "probe") setProbeStatus(mapped)
   }
 
-  // source is "probe" | "dashboard" | "notifications". Clears that
-  // source's own rate-limit state and bumps its own lastSyncMs (probe has
-  // no lastSyncMs of its own -- it isn't a data sync).
   function onFetchSuccess(source) {
     var now = Date.now()
     if (source === "dashboard") {
@@ -584,13 +625,8 @@ Item {
     }
   }
 
-  // Best-effort extraction of GitHub's X-Ratelimit-Reset (unix epoch
-  // seconds) out of whatever text is available -- present on the raw -i
-  // header block for fetch-notifications (headers arrive even on a 403),
-  // essentially never present for fetch-dashboard (plain `gh api graphql`,
-  // no -i, so a 403 there has no headers at all -- the +60min fallback in
-  // handleFetchFailure is what actually fires for that path). Never
-  // throws; returns 0 (== "not parseable") on no match.
+  // Best-effort extraction of X-Ratelimit-Reset (unix epoch seconds) from
+  // whatever text is available. Never throws; 0 means "not parseable".
   function parseRateLimitReset(text) {
     var t = String(text || "")
     var m = /X-Ratelimit-Reset:\s*"?(\d+)"?/i.exec(t)
@@ -606,82 +642,83 @@ Item {
     return pad2(d.getHours()) + ":" + pad2(d.getMinutes())
   }
 
-  // Truncates a JSON value to a short, log-safe preview -- used only for
-  // GraphQL's own `errors` array (server-authored error text about the
-  // query itself, not attacker-controlled remote content), capped
-  // defensively so a pathological error payload can't bloat the log.
   function briefJson(v) {
     try { return JSON.stringify(v).slice(0, 500) } catch (e) { return String(v).slice(0, 500) }
   }
 
   // ============================================================
-  // Auth probe (scripts/probe-auth): run once at startup, and again every
-  // 5 minutes while the derived status is no-gh/unauthenticated
-  // (06-design.md degradation ladder). Exit codes are the stable contract
-  // documented in scripts/probe-auth's own header (0 ok / 3 no-gh /
-  // 4 unauthenticated / 5 other -- classify further via
-  // Model.classifyFailure).
-  //
-  // probeWatchdog (S5b Finding 1): a hung `gh api user` used to leave
-  // probeProc.running permanently true, making startProbe()'s own
-  // re-entrancy guard silently no-op every future re-probe (including
-  // reProbeTimer's every-5-minute attempts) forever -- the plugin never
-  // recovered without a manual shell/plugin restart. This mirrors
-  // dashWatchdog/notifWatchdog exactly: force-stop after 30s and treat it
-  // as a real (if inconclusive) result, never a wedge. Classified as
-  // "offline", not "no-gh" -- a hang is network-shaped (DNS/TCP not
-  // resolving/connecting), not "the binary is missing", and "offline"
-  // does not block polling, so the pollers get a chance to try for
-  // themselves as soon as the watchdog fires.
+  // Auth probe: `gh api user --jq .login`, direct child. Run once at
+  // startup, and again every 5 minutes while status is no-gh/unauthenticated.
   // ============================================================
 
   function startProbe() {
     if (probeProc.running) return
-    probeWatchdog.restart()
-    probeProc.running = true
+    if (!root.ghPath) { resolveGhPath(); return }
+    probeProc.command = [root.ghPath, "api", "user", "--jq", ".login"]
+    _armProcess("probe")
+  }
+
+  Timer {
+    id: probeWatchdog
+    repeat: false
+    onTriggered: {
+      if (probeProc.running) {
+        root.log("auth probe watchdog: exceeded " + probeWatchdog.interval + "ms, killing")
+        root._probeWatchdogFired = true
+        root._probeWatchdogFiredCount = root._probeWatchdogFiredCount + 1
+        probeProc.signal(15)
+        probeKillTimer.restart()
+      }
+    }
+  }
+
+  Timer {
+    id: probeKillTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (probeProc.running && probeProc.processId === root._probeArmedPid) probeProc.signal(9)
+    }
   }
 
   Process {
     id: probeProc
-    command: ["bash", "-lc", 'exec "$0"', root.pluginDir + "/scripts/probe-auth"]
-    // StdioCollector has no byte ceiling (Quickshell doesn't expose one) --
-    // accepted risk (exchange/11-s5a-security-review.md F5): bounded in
-    // practice by `gh api user`'s own tiny response shape and this file's
-    // 30s watchdog, not by an explicit size limit here.
-    stdout: StdioCollector { id: probeOut; waitForEnd: true }
-    stderr: StdioCollector { id: probeErr; waitForEnd: true }
+    command: []
+    running: false
+    onStarted: { root._probeArmedPid = processId }
+    onRunningChanged: {
+      if (!running) {
+        var gen = root._probeGen
+        Qt.callLater(function () {
+          if (root._probeGen === gen && root._probeExitedGen !== gen) {
+            root._probeExitedGen = gen
+            root._finalizeProcess("probe", 127, 0, true)
+          }
+        })
+      }
+    }
+    stdout: SplitParser { onRead: function (line) { root._appendBoundedOutput("probe", line, false) } }
+    stderr: SplitParser { onRead: function (line) { root._appendBoundedOutput("probe", line, true) } }
     onExited: function (exitCode, exitStatus) {
-      probeWatchdog.stop()
-      if (internal.probeWatchdogFired) { internal.probeWatchdogFired = false; return }
-      root.handleProbeResult(exitCode, probeOut.text, probeErr.text)
+      root._probeExitedGen = root._probeGen
+      root._finalizeProcess("probe", exitCode, exitStatus, false)
     }
   }
 
-  function handleProbeResult(exitCode, stdoutText, stderrText) {
+  // exitCode/rawOut/rawErr already reflect a real exit, a watchdog timeout
+  // (124), an output overflow (137), or a missing binary (127) -- see
+  // _finalizeProcess. classifyFailure's own exitCode===127 check is what
+  // turns a missing gh binary into "no-gh" here, with no special-casing
+  // needed for that case specifically.
+  function handleProbeResult(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
-      // exchange/19-feedback-delta-spec.md F6: probe-auth prints the
-      // authenticated login (not a secret -- see its own header comment) on
-      // stdout on success. Trimmed defensively (a trailing newline is the
-      // only thing ever actually present) -- Model.mapNotifications treats
-      // a missing/empty login as "never external" rather than throwing, so
-      // a malformed capture here degrades gracefully, not fatally.
-      var login = String(stdoutText || "").replace(/^\s+|\s+$/g, "")
+      var login = String(rawOut || "").replace(/^\s+|\s+$/g, "")
       if (login) internal.login = login
-      log("probe-auth: authenticated" + (login ? " as " + login : ""))
+      log("probe: authenticated" + (login ? " as " + login : ""))
       onFetchSuccess("probe")
-      // Mid-session recovery (full-tree review, exchange/40): when a POLLER
-      // was the source that recorded no-gh/unauthenticated (token revoked /
-      // gh binary temporarily missing while already running), that stale
-      // per-source status survives this probe success -- the derived
-      // `status` would stay blocked (so onStatusChanged never re-fires) and
-      // both trigger*Fetch guards would refuse every fetch forever, with no
-      // re-probe armed either: a permanent wedge until shell restart.
-      // Boot-time degradation never hits this (poller statuses are still
-      // "loading" then), which is why live testing always recovered. A
-      // successful probe is an authoritative "gh exists and is
-      // authenticated" signal, so clear exactly those two stale blocking
-      // values back to "loading" -- the pollers refetch immediately below
-      // and re-derive their own true status.
+      // Mid-session recovery: a poller that previously recorded
+      // no-gh/unauthenticated must not keep blocking forever once a fresh
+      // probe proves gh is back and authenticated.
       if (internal.dashboardStatus === "no-gh" || internal.dashboardStatus === "unauthenticated") {
         internal.dashboardStatus = "loading"
       }
@@ -689,117 +726,64 @@ Item {
         internal.notifStatus = "loading"
       }
       internal.pollersActive = true
-      // pollersActive may already have been true (rising edge lost) -- the
-      // timers' `running` binding won't re-fire triggeredOnStart in that
-      // case, so kick both fetches explicitly; their own re-entrancy
-      // guards make this a no-op whenever a fetch is already in flight or
-      // the state still forbids one.
       triggerDashboardFetch()
       triggerNotificationsFetch()
       return
     }
-    if (exitCode === 3) { setProbeStatus("no-gh"); reProbeTimer.restart(); return }
-    if (exitCode === 4) { setProbeStatus("unauthenticated"); reProbeTimer.restart(); return }
-    // exit 5: probe-auth's own coarse "some other failure" bucket --
-    // classify precisely from stderr, but this alone must never block
-    // polling (only a confirmed no-gh/unauthenticated does that).
-    var cls = Model.classifyFailure(stderrText, exitCode)
-    handleFetchFailure("probe", cls, stderrText)
-    if (internal.probeStatus === "no-gh" || internal.probeStatus === "unauthenticated") {
+    var cls = Model.classifyFailure(rawErr, exitCode)
+    if (cls === "no-gh" || cls === "unauthenticated") {
+      setProbeStatus(cls)
       reProbeTimer.restart()
-    } else {
-      internal.pollersActive = true
-      maybeRearmReProbeForLogin()
-      // Same wedge family as the exit-0 branch above, other half: an
-      // inconclusive probe (offline/error) while a stale POLLER status
-      // still blocks fetching must keep the 5-min probe loop alive --
-      // nothing else can ever clear that block, and this branch's own
-      // status assignment may not change the derived `status` (so
-      // onStatusChanged won't re-arm it).
-      ensureReProbeWhileBlocked()
+      return
     }
+    handleFetchFailure("probe", cls, rawErr)
+    internal.pollersActive = true
+    maybeRearmReProbeForLogin()
+    ensureReProbeWhileBlocked()
   }
 
-  // Full-tree review (exchange/40): as long as the DERIVED status is
-  // no-gh/unauthenticated, the pollers refuse to fetch -- so the only path
-  // back to life is a future probe success. Guarantee one is always
-  // scheduled while blocked; restart() is harmless when already armed.
+  // As long as the derived status is no-gh/unauthenticated, the pollers
+  // refuse to fetch -- guarantee a re-probe is always scheduled while
+  // blocked (restart() is harmless when already armed).
   function ensureReProbeWhileBlocked() {
     if (status === "no-gh" || status === "unauthenticated") reProbeTimer.restart()
   }
 
-  // exchange/23-s11-delta-review.md F2: a probe failure classified as
-  // offline/rate-limited/error (i.e. NOT no-gh/unauthenticated -- those
-  // branches above already restart reProbeTimer for their own reason, to
-  // unblock the pollers) used to leave internal.login unset for the rest of
-  // the session with nothing left to ever retry capturing it, since
-  // reProbeTimer's only other restart sites are the no-gh/unauthenticated
-  // branches. The ordinary trigger is exactly the boring case -- network
-  // not up yet at shell startup/resume-from-suspend, so probe-auth's very
-  // first attempt times out into probeWatchdog or fails with a transient
-  // "offline"/"error" classification -- not a rare edge case. This keeps
-  // the slow (5min) re-probe cadence alive purely to retry learning the
-  // login, without re-blocking the pollers (already set active by the
-  // caller before this runs): once internal.login is non-empty, this is a
-  // no-op forever, including via the opportunistic dashboard-response
-  // capture in handleDashboardExit, which is the more common way login
-  // actually ends up populated once the pollers are running.
+  // Keeps the slow re-probe cadence alive purely to retry learning the
+  // login (e.g. after a probe timeout), without re-blocking the pollers.
   function maybeRearmReProbeForLogin() {
     if (!internal.login) reProbeTimer.restart()
   }
 
-  Timer {
-    id: reProbeTimer
-    interval: 300000  // 5 min, per the degradation ladder's "slow re-probe"
-    repeat: false
-    onTriggered: root.startProbe()
-  }
+  // Fixed in production (never reassigned after startup) -- live-bound only
+  // so a probe can shorten it before first use, same as the *TimeoutMs above.
+  property int reProbeMs: 300000
 
   Timer {
-    id: probeWatchdog
-    interval: 30000
+    id: reProbeTimer
+    interval: root.reProbeMs
     repeat: false
-    onTriggered: {
-      if (probeProc.running) {
-        root.log("auth probe watchdog: exceeded 30s, killing")
-        internal.probeWatchdogFired = true
-        probeProc.running = false
-        root.handleFetchFailure("probe", "offline", "watchdog: auth probe exceeded 30s")
-        // Never block polling on an inconclusive/timed-out probe alone --
-        // let the real pollers discover the true state for themselves.
-        internal.pollersActive = true
-        // exchange/23-s11-delta-review.md F2: same reasoning as
-        // maybeRearmReProbeForLogin's own comment -- a hung probe (this
-        // watchdog's whole reason for existing) is exactly the scenario
-        // where the login never gets learned otherwise.
-        root.maybeRearmReProbeForLogin()
-        // Full-tree review (exchange/40): if a stale POLLER status still
-        // blocks fetching, this hung probe was the only scheduled way out
-        // -- and with the login already known, maybeRearmReProbeForLogin
-        // above won't re-arm anything. Keep the probe loop alive while
-        // blocked, whatever the login state.
-        root.ensureReProbeWhileBlocked()
-      }
-    }
+    onTriggered: root.reProbeNow()
+  }
+
+  // no-gh re-resolves ghPath (the binary may have appeared/moved);
+  // unauthenticated just retries the probe against the same ghPath.
+  function reProbeNow() {
+    if (root.status === "no-gh") { forceResolveGhPath(); return }
+    startProbe()
   }
 
   // ============================================================
-  // Dashboard fetch (scripts/fetch-dashboard -- combined GraphQL query):
-  // openPRs + reviewRequests + repos in one call. Never blanks the UI on
-  // failure -- internal.openPRs/reviewRequests/repos are only ever
-  // reassigned when Model.mapDashboard says that specific section actually
-  // parsed (03-shell-api.md §6 "keep stale data visible on failure";
-  // exchange/12-s5b-correctness-review.md Finding 4 for the per-section
-  // partial-success case).
+  // Dashboard fetch: one combined GraphQL query, direct `gh` child. Never
+  // blanks the UI on failure -- a section is only reassigned when
+  // Model.mapDashboard says it actually parsed.
   // ============================================================
 
   Timer {
     id: dashboardTimer
-    // Placeholder only -- reassigned imperatively at arm time below (S5b
-    // Finding 3: a live binding here silently discards the in-progress
-    // countdown on any settings edit). A settings change takes effect at
-    // the next natural cycle boundary (onTriggered) or the next time this
-    // timer starts running (onRunningChanged), never mid-countdown.
+    // Placeholder only -- reassigned imperatively at arm time below (a
+    // live-bound interval would discard an in-progress countdown on any
+    // settings edit).
     interval: 180000
     running: internal.pollersActive
     repeat: true
@@ -815,110 +799,107 @@ Item {
     if (dashboardProc.running) return
     if (root.status === "no-gh" || root.status === "unauthenticated") return
     if (internal.dashboardStatus === "rate-limited" && Date.now() < internal.dashboardRateLimitedUntilMs) return
-    dashWatchdog.restart()
-    dashboardProc.running = true
+    if (!root.ghPath) return
+    dashboardProc.command = [root.ghPath, "api", "graphql", "-f", "query=" + Model.DASHBOARD_QUERY]
+    _armProcess("dashboard")
+  }
+
+  Timer {
+    id: dashWatchdog
+    repeat: false
+    onTriggered: {
+      if (dashboardProc.running) {
+        root.log("dashboard fetch watchdog: exceeded " + dashWatchdog.interval + "ms, killing")
+        root._dashboardWatchdogFired = true
+        root._dashboardWatchdogFiredCount = root._dashboardWatchdogFiredCount + 1
+        dashboardProc.signal(15)
+        dashKillTimer.restart()
+      }
+    }
+  }
+
+  Timer {
+    id: dashKillTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (dashboardProc.running && dashboardProc.processId === root._dashboardArmedPid) dashboardProc.signal(9)
+    }
   }
 
   Process {
     id: dashboardProc
-    // Fixed at build time: the only variable argv element is pluginDir,
-    // which is resolved from this component's own file:// URL, never from
-    // remote/user input.
-    command: ["bash", "-lc", 'exec "$0"', root.pluginDir + "/scripts/fetch-dashboard"]
-    // StdioCollector has no byte ceiling (Quickshell doesn't expose one) --
-    // accepted risk (exchange/11-s5a-security-review.md F5): bounded in
-    // practice by the GraphQL query's own first:20/first:20/first:10 caps,
-    // gh-side timeouts, and this file's 30s watchdog, not by an explicit
-    // size limit here.
-    stdout: StdioCollector { id: dashOut; waitForEnd: true }
-    stderr: StdioCollector { id: dashErr; waitForEnd: true }
+    command: []
+    running: false
+    onStarted: { root._dashboardArmedPid = processId }
+    onRunningChanged: {
+      if (!running) {
+        var gen = root._dashboardGen
+        Qt.callLater(function () {
+          if (root._dashboardGen === gen && root._dashboardExitedGen !== gen) {
+            root._dashboardExitedGen = gen
+            root._finalizeProcess("dashboard", 127, 0, true)
+          }
+        })
+      }
+    }
+    stdout: SplitParser { onRead: function (line) { root._appendBoundedOutput("dashboard", line, false) } }
+    stderr: SplitParser { onRead: function (line) { root._appendBoundedOutput("dashboard", line, true) } }
     onExited: function (exitCode, exitStatus) {
-      dashWatchdog.stop()
-      if (internal.dashWatchdogFired) { internal.dashWatchdogFired = false; return }
-      root.handleDashboardExit(exitCode, dashOut.text, dashErr.text)
+      root._dashboardExitedGen = root._dashboardGen
+      root._finalizeProcess("dashboard", exitCode, exitStatus, false)
     }
   }
 
+  function _captureLoginFromDashboard(login) {
+    if (!login || internal.login) return
+    internal.login = login
+    log("login learned opportunistically from dashboard response: " + internal.login)
+    if (internal.notifications.length > 0) {
+      internal.notifications = Model.remapNotificationsExternal(internal.notifications, internal.login)
+    }
+  }
+
+  // C2: count parsed vs. null sections. All parsed -> ok. Some parsed (plus
+  // GraphQL `errors`) -> keep the parsed sections, advance sync time, flag
+  // dashboardPartial, log the errors. None parsed -> failure as before.
   function handleDashboardExit(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
       var parsed = null
       try { parsed = JSON.parse(rawOut) } catch (e) { parsed = null }
       var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
-      var gotSomething = mapped.openPRs !== null || mapped.reviewRequests !== null || mapped.repos !== null || mapped.myIssues !== null
-      if (gotSomething) {
-        if (mapped.openPRs !== null) internal.openPRs = mapped.openPRs
-        if (mapped.reviewRequests !== null) internal.reviewRequests = mapped.reviewRequests
-        if (mapped.repos !== null) internal.repos = mapped.repos
-        if (mapped.myIssues !== null) internal.myIssues = mapped.myIssues
-        // exchange/23-s11-delta-review.md F2 (part a): opportunistic login
-        // capture. Every dashboard response carries viewer.login whenever
-        // any viewer-scoped section resolved -- a free, no-extra-call way
-        // to learn internal.login if the auth probe itself never got the
-        // chance to (its own first attempt failed non-auth, or hung into
-        // probeWatchdog -- see handleProbeResult/probeWatchdog's
-        // maybeRearmReProbeForLogin calls for the other half of this fix).
-        // Only ever sets FROM empty -- never overwrites an already-known
-        // login (the probe's own value, once learned, stays authoritative;
-        // exchange/23 F3 is the accepted-risk note on stale logins across a
-        // mid-session `gh` account switch, documented in developers.md).
-        if (mapped.login && !internal.login) {
-          internal.login = mapped.login
-          log("login learned opportunistically from dashboard response: " + internal.login)
-          // Re-map isExternal on whatever notifications are already held in
-          // memory, once, so already-fetched inbox rows don't have to wait
-          // out a full notificationsIntervalSec poll to gain a correct
-          // owner pill. Cheap: internal.notifications is the already-mapped
-          // list (Service.qml never retains the raw REST body past
-          // handleNotificationsExit), and every item already carries its
-          // own `owner` field independent of login -- see
-          // Model.remapNotificationsExternal's own header comment.
-          if (internal.notifications.length > 0) {
-            internal.notifications = Model.remapNotificationsExternal(internal.notifications, internal.login)
-          }
-        }
-        if (parsed && parsed.errors) {
-          log("dashboard fetch: partial GraphQL errors -- kept the section(s) that parsed, "
-            + "discarded the rest: " + briefJson(parsed.errors))
-        }
-        onFetchSuccess("dashboard")
-      } else {
+      var sections = [mapped.openPRs, mapped.reviewRequests, mapped.repos, mapped.myIssues]
+      var parsedCount = sections.filter(function (s) { return s !== null }).length
+      if (parsedCount === 0) {
         log("dashboard fetch: no usable data in JSON envelope -- keeping last-good data")
         handleFetchFailure("dashboard", "error",
           rawErr || (parsed && parsed.errors ? briefJson(parsed.errors) : "unparseable/empty JSON"))
+        return
       }
+      if (mapped.openPRs !== null) internal.openPRs = mapped.openPRs
+      if (mapped.reviewRequests !== null) internal.reviewRequests = mapped.reviewRequests
+      if (mapped.repos !== null) internal.repos = mapped.repos
+      if (mapped.myIssues !== null) internal.myIssues = mapped.myIssues
+      _captureLoginFromDashboard(mapped.login)
+      internal.dashboardPartial = parsedCount < sections.length
+      if (internal.dashboardPartial) {
+        log("dashboard fetch: partial GraphQL errors -- kept the section(s) that parsed: "
+          + briefJson(parsed && parsed.errors))
+      }
+      onFetchSuccess("dashboard")
       return
     }
     var cls = Model.classifyFailure(rawErr, exitCode)
     handleFetchFailure("dashboard", cls, rawErr)
   }
 
-  Timer {
-    id: dashWatchdog
-    interval: 30000
-    repeat: false
-    onTriggered: {
-      if (dashboardProc.running) {
-        root.log("dashboard fetch watchdog: exceeded 30s, killing")
-        internal.dashWatchdogFired = true
-        dashboardProc.running = false
-        root.handleFetchFailure("dashboard", "offline", "watchdog: dashboard fetch exceeded 30s")
-      }
-    }
-  }
-
   // ============================================================
-  // Notifications fetch (scripts/fetch-notifications [etag]): conditional
-  // GET, ETag round-tripped. gh exits non-zero with "HTTP 304" on a
-  // genuine no-change response (04-github-data.md §2, live-observed) --
-  // that specific shape is success (bump lastSyncMs), not a failure.
-  // Headers (including a possibly-refreshed ETag) arrive on stdout even on
-  // a 304, per S1's byte-level capture (exchange/07-s1-scaffold.md).
+  // Notifications fetch: conditional GET, ETag round-tripped, direct `gh`
+  // child. A genuine 304 (no-change) is success, not failure.
   // ============================================================
 
   Timer {
     id: notificationsTimer
-    // Placeholder only -- see dashboardTimer's comment above (S5b
-    // Finding 3); same assign-at-arm pattern.
     interval: 60000
     running: internal.pollersActive
     repeat: true
@@ -934,52 +915,80 @@ Item {
     if (notificationsProc.running) return
     if (root.status === "no-gh" || root.status === "unauthenticated") return
     if (internal.notifStatus === "rate-limited" && Date.now() < internal.notifRateLimitedUntilMs) return
-    // The ETag is the one remote-derived value in this whole service. It
-    // is passed as its own argv element ($1), never interpolated into the
-    // -lc string -- see the header comment and exchange/08-s2-service.md
-    // for the live probe that verified bash -lc's "$0"/"$1" positional-
-    // parameter mechanism actually behaves this way against this system's
-    // bash.
-    notificationsProc.command = ["bash", "-lc", 'exec "$0" "$1"',
-      root.pluginDir + "/scripts/fetch-notifications", internal.notificationsEtag]
-    notifWatchdog.restart()
-    notificationsProc.running = true
+    if (!root.ghPath) return
+    var etag = Model.sanitizeEtag(internal.notificationsEtag)
+    var cmd = [root.ghPath, "api", "-i", "notifications"]
+    if (etag) cmd = cmd.concat(["-H", "If-None-Match: " + etag])
+    notificationsProc.command = cmd
+    _armProcess("notifications")
+  }
+
+  Timer {
+    id: notifWatchdog
+    repeat: false
+    onTriggered: {
+      if (notificationsProc.running) {
+        root.log("notifications fetch watchdog: exceeded " + notifWatchdog.interval + "ms, killing")
+        root._notificationsWatchdogFired = true
+        root._notificationsWatchdogFiredCount = root._notificationsWatchdogFiredCount + 1
+        notificationsProc.signal(15)
+        notifKillTimer.restart()
+      }
+    }
+  }
+
+  Timer {
+    id: notifKillTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (notificationsProc.running && notificationsProc.processId === root._notificationsArmedPid) notificationsProc.signal(9)
+    }
   }
 
   Process {
     id: notificationsProc
-    // StdioCollector has no byte ceiling (Quickshell doesn't expose one) --
-    // accepted risk (exchange/11-s5a-security-review.md F5): bounded in
-    // practice by fetch-notifications never passing --paginate (one
-    // default-sized REST page only), gh-side timeouts, and this file's 30s
-    // watchdog, not by an explicit size limit here.
-    stdout: StdioCollector { id: notifOut; waitForEnd: true }
-    stderr: StdioCollector { id: notifErr; waitForEnd: true }
+    command: []
+    running: false
+    onStarted: { root._notificationsArmedPid = processId }
+    onRunningChanged: {
+      if (!running) {
+        var gen = root._notificationsGen
+        Qt.callLater(function () {
+          if (root._notificationsGen === gen && root._notificationsExitedGen !== gen) {
+            root._notificationsExitedGen = gen
+            root._finalizeProcess("notifications", 127, 0, true)
+          }
+        })
+      }
+    }
+    stdout: SplitParser { onRead: function (line) { root._appendBoundedOutput("notifications", line, false) } }
+    stderr: SplitParser { onRead: function (line) { root._appendBoundedOutput("notifications", line, true) } }
     onExited: function (exitCode, exitStatus) {
-      notifWatchdog.stop()
-      if (internal.notifWatchdogFired) { internal.notifWatchdogFired = false; return }
-      root.handleNotificationsExit(exitCode, notifOut.text, notifErr.text)
+      root._notificationsExitedGen = root._notificationsGen
+      root._finalizeProcess("notifications", exitCode, exitStatus, false)
     }
   }
 
+  // C4: an exit-0 response is only trusted with a 200 status and an array
+  // body -- anything else is a failure that keeps the last-good data.
   function handleNotificationsExit(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
       var parsed = Model.parseHeadersAndBody(rawOut)
-      if (parsed.etag) internal.notificationsEtag = parsed.etag
-      if (parsed.body !== null) {
+      if (parsed.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed.etag)
+      if (Model.isNotificationsBodyValid(parsed)) {
         internal.notifications = Model.mapNotifications(parsed.body, internal.login)
+        onFetchSuccess("notifications")
+      } else {
+        log("notifications: exit 0 but not a valid 200+array body (status=" + parsed.status + ") -- keeping last-good data")
+        handleFetchFailure("notifications", "error", "malformed 200 response or unexpected status " + parsed.status)
       }
-      onFetchSuccess("notifications")
       return
     }
     var cls = Model.classifyFailure(rawErr, exitCode)
     if (cls === "http-304") {
-      // No-change: still refresh the etag if gh printed a new header block
-      // (it shouldn't differ on a 304, but nothing forbids it) and count
-      // this as a successful sync -- 06-design.md is explicit that a 304
-      // is "no change", not an error.
       var parsed304 = Model.parseHeadersAndBody(rawOut)
-      if (parsed304.etag) internal.notificationsEtag = parsed304.etag
+      if (parsed304.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed304.etag)
       log("notifications: no change (304)")
       onFetchSuccess("notifications")
       return
@@ -987,27 +996,20 @@ Item {
     handleFetchFailure("notifications", cls, rawOut + "\n" + rawErr)
   }
 
+  // ============================================================
   Timer {
-    id: notifWatchdog
-    interval: 30000
+    id: startupTimer
+    interval: 0
+    running: true
     repeat: false
-    onTriggered: {
-      if (notificationsProc.running) {
-        root.log("notifications fetch watchdog: exceeded 30s, killing")
-        internal.notifWatchdogFired = true
-        notificationsProc.running = false
-        root.handleFetchFailure("notifications", "offline", "watchdog: notifications fetch exceeded 30s")
-      }
-    }
+    onTriggered: root.resolveGhPath()
   }
 
-  // ============================================================
   Component.onCompleted: {
     log("service ready (pluginDir=" + root.pluginDir
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
       + " notificationsIntervalSec=" + root.notificationsIntervalSec
       + " repoLimit=" + root.repoLimit
       + " issuesFilter=" + root.issuesFilter + ")")
-    startProbe()
   }
 }
