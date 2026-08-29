@@ -3,12 +3,9 @@ const { join } = require("node:path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-// A4 sink audit: every local Text{} sink must be textFormat:
-// Text.PlainText, since remote/GitHub-sourced strings are rendered there
-// and must never be interpreted as rich text. Scoped to each Text{}'s own
-// brace-matched body (not a fixed line window) -- this codebase's own
-// convention puts id/anchors before text/textFormat, which routinely runs
-// past a short fixed window on a real row delegate.
+// Every local Text{} sink must be textFormat: Text.PlainText, since remote/
+// GitHub-sourced strings are rendered there. Scoped to each Text{}'s own
+// brace-matched body, since id/anchors routinely precede text/textFormat.
 test("every local QML Text sink is explicitly plain text", () => {
     const root = join(__dirname, "..");
     for (const file of readdirSync(root).filter(name => name.endsWith(".qml"))) {

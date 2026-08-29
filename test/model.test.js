@@ -64,9 +64,9 @@ test("apiUrlToWebUrl: unknown/unmatched subject type -> empty string (caller fal
   assert.strictEqual(Model.apiUrlToWebUrl({ url: "not a url at all" }), "")
 })
 
-// ---------------------------------------------- apiUrlToWebUrl (adversarial, S5a F1)
+// ---------------------------------------------- apiUrlToWebUrl (adversarial)
 
-test("apiUrlToWebUrl: shell-metacharacter-shaped trailing content is rejected (exchange/11-s5a-security-review.md F1)", function () {
+test("apiUrlToWebUrl: shell-metacharacter-shaped trailing content is rejected", function () {
   // The finding's own repro: an embedded slash breaks the [^\/]+ rest
   // capture before ID validation even runs, so this never matches at all.
   assert.strictEqual(Model.apiUrlToWebUrl({ type: "PullRequest", url: "https://api.github.com/repos/o/r/pulls/1; rm -rf /" }), "")
@@ -171,7 +171,7 @@ test("mapNotifications: rich-text/HTML-ish titles pass through untouched (mappin
   assert.strictEqual(mapped[0].title, evil)
 })
 
-test("mapNotifications: per-field string length is capped (exchange/11-s5a-security-review.md F2)", function () {
+test("mapNotifications: per-field string length is capped", function () {
   var hugeTitle = new Array(1024 * 1024 + 2).join("x")   // ~1MB
   var hugeReason = new Array(10000).join("y")
   var hugeRepo = new Array(10000).join("z")
@@ -194,7 +194,7 @@ test("mapNotifications: never evals title content even if it looks like code", f
   assert.strictEqual(global.__pwned, undefined)
 })
 
-// ------------------------------------------------- mapNotifications: F6 (own vs external)
+// ------------------------------------------------- mapNotifications: own vs external
 
 test("mapNotifications: login param sets isExternal/owner per item", function () {
   var mapped = Model.mapNotifications([
@@ -239,7 +239,7 @@ test("mapNotifications: missing/malformed repository.full_name -- owner is empty
   })
 })
 
-// ---------------------------------------------------- remapNotificationsExternal (S12/F2)
+// ---------------------------------------------------- remapNotificationsExternal
 
 test("remapNotificationsExternal: re-derives isExternal from each item's own owner, leaves every other field untouched", function () {
   var before = Model.mapNotifications([
@@ -304,15 +304,14 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(pr.webUrl, "https://github.com/omacom/omarchy-site/pull/77")
   assert.strictEqual(pr.isDraft, false)
   // statusCheckRollup was null in the real captured sample -- a legitimate
-  // empty state (no CI configured), not a query bug (see 04-github-data.md #3).
+  // empty state (no CI configured), not a query bug.
   assert.strictEqual(pr.ciState, "none")
   assert.strictEqual(pr.reviewDecision, "")
-  // F6: this PR is against a fork of a third-party repo (omacom), not
-  // the account's (HalmyLyseas) own -- a real live example of an external
-  // PR row, not a fabricated one.
+  // This PR is against a fork of a third-party repo (omacom), not the
+  // account's own -- a real example of an external PR row.
   assert.strictEqual(pr.owner, "omacom")
   assert.strictEqual(pr.isExternal, true)
-  // G2: this PR's live `comments(last: 1)` came back empty -- no comment yet.
+  // This PR's live `comments(last: 1)` came back empty -- no comment yet.
   assert.strictEqual(pr.lastCommenter, "")
   assert.strictEqual(pr.lastCommentAt, "")
 
@@ -336,8 +335,8 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(repoWithoutRelease.releaseUrl, "")
   assert.strictEqual(repoWithoutRelease.stars, 1)
 
-  // F2: the live archived-repo acceptance fixture -- flows through
-  // completely unfiltered (no isArchived query arg anywhere), pill-flagged.
+  // An archived repo flows through completely unfiltered (no isArchived
+  // query arg anywhere), only pill-flagged.
   var archivedRepo = mapped.repos.filter(function (r) { return r.name === "VandalHearts-decomp-SLPM-86007" })[0]
   assert.ok(archivedRepo, "expected the archived VandalHearts-decomp repo in mapped repos -- must not be filtered out")
   assert.strictEqual(archivedRepo.isArchived, true)
@@ -347,8 +346,8 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(forkRepo.isFork, true)
   assert.strictEqual(Model.repoPill(forkRepo), "fork")
 
-  // F3: the acceptance fixture issue -- authored by this account, in a repo
-  // it does not own, MUST appear in myIssues.
+  // An issue authored by this account, in a repo it does not own, MUST
+  // appear in myIssues.
   assert.strictEqual(mapped.myIssues.length, raw.data.viewer.myIssues.nodes.length)
   var marketplaceIssue = mapped.myIssues.filter(function (i) { return i.number === 2672 })[0]
   assert.ok(marketplaceIssue, "expected HANCORE-linux/omarchy-plugin-marketplace#2672 in myIssues")
@@ -356,16 +355,14 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(marketplaceIssue.webUrl, "https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2672")
   assert.strictEqual(marketplaceIssue.owner, "HANCORE-linux")
   assert.strictEqual(marketplaceIssue.isExternal, true)
-  // G4 acceptance evidence (exchange/27-s13-data-delta.md): this account IS
-  // still subscribed to its own marketplace verification issue.
+  // This account is still subscribed to its own marketplace verification issue.
   assert.strictEqual(marketplaceIssue.subscribed, true)
-  // G2: real live comment on this issue, authored by the account itself.
+  // A real comment on this issue, authored by the account itself.
   assert.strictEqual(marketplaceIssue.lastCommenter, "HalmyLyseas")
   assert.strictEqual(marketplaceIssue.lastCommentAt, "2026-08-27T21:47:43Z")
 
-  // G4 acceptance evidence: the human's own clutter example, live-verified
-  // UNSUBSCRIBED -- MUST come back subscribed:false so filterIssues("focus")
-  // hides it by default.
+  // A real UNSUBSCRIBED example -- MUST come back subscribed:false so
+  // filterIssues("focus") hides it by default.
   var protonIssue = mapped.myIssues.filter(function (i) { return i.number === 8626 })[0]
   assert.ok(protonIssue, "expected ValveSoftware/Proton#8626 in myIssues")
   assert.strictEqual(protonIssue.repo, "ValveSoftware/Proton")
@@ -380,17 +377,15 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   assert.strictEqual(themeIssue.lastCommenter, "")
   assert.strictEqual(themeIssue.lastCommentAt, "")
 
-  // exchange/23-s11-delta-review.md F2: mapDashboard also returns the
-  // viewer's own login straight off the envelope, independent of whether
-  // any individual section resolved -- Service.qml's opportunistic capture
-  // (handleDashboardExit) reads this.
+  // mapDashboard also returns the viewer's own login straight off the
+  // envelope, independent of whether any section resolved -- Service.qml's
+  // opportunistic capture (handleDashboardExit) reads this.
   assert.strictEqual(mapped.login, raw.data.viewer.login)
   assert.ok(mapped.login, "expected a non-empty login in the real fixture")
 
-  // C3: totalCount/issueCount ride alongside each section, read straight
-  // off the fixture's own GraphQL metadata (bumped deliberately above the
-  // section's own cap/window so "N of T" has real coverage -- see the
-  // fixture's own totalCount/issueCount values).
+  // totalCount/issueCount ride alongside each section, read straight off
+  // the fixture's own GraphQL metadata (bumped above each section's own
+  // cap/window so "N of T" has real coverage).
   assert.strictEqual(mapped.openPRsTotal, raw.data.viewer.openPRs.totalCount)
   assert.strictEqual(mapped.myIssuesTotal, raw.data.viewer.myIssues.totalCount)
   assert.strictEqual(mapped.reposTotal, raw.data.viewer.repositories.totalCount)
@@ -411,8 +406,8 @@ test("mapDashboard: login field -- present when viewer.login is set, empty strin
 })
 
 test("mapDashboard: real review-requests-graphql empty-inbox fixture maps to []", function () {
-  // This is the genuine "no review requests" shape from a live account, not
-  // a fabricated empty case -- exchange/04-github-data.md #4.
+  // This is the genuine "no review requests" shape from a live account,
+  // not a fabricated empty case.
   var reviewOnly = loadFixture("review-requests-graphql.json")
   var combined = { data: { viewer: {}, reviewRequests: reviewOnly.data.search } }
   var mapped = Model.mapDashboard(combined)
@@ -437,10 +432,8 @@ test("mapDashboard: populated reviewRequests map correctly", function () {
 })
 
 test("mapDashboard: non-object / malformed input returns all-null per-section shape (nothing usable -- caller must not replace last-good data), never throws", function () {
-  // Per exchange/12-s5b-correctness-review.md F4, a section is `null` (not
-  // []) when it did not resolve at all -- that's the explicit "don't
-  // replace" signal the Service layer relies on. An envelope with no
-  // usable `data` at all (these cases) means all three sections are null.
+  // A section is `null` (not []) when it did not resolve at all -- the
+  // explicit "don't replace" signal the Service layer relies on.
   var allNull = {
     openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "",
     openPRsTotal: null, reviewRequestsTotal: null, reposTotal: null, myIssuesTotal: null
@@ -455,7 +448,7 @@ test("mapDashboard: non-object / malformed input returns all-null per-section sh
   assert.deepStrictEqual(Model.mapDashboard({ data: { viewer: null, reviewRequests: null } }), allNull)
 })
 
-// ------------------------------------------- mapDashboard partial-GraphQL (S5b F4)
+// ------------------------------------------- mapDashboard partial-GraphQL
 
 test("mapDashboard: partial envelope (data present for some sections, errors for others) keeps the sections that parsed, nulls the rest", function () {
   // Realistic shape: reviewRequests (via GraphQL `search`, its own stricter
@@ -478,8 +471,8 @@ test("mapDashboard: partial envelope (data present for some sections, errors for
   assert.strictEqual(mapped.repos.length, 1)
   assert.strictEqual(mapped.reviewRequests, null, "the errored section must be null, not []," +
     " so the Service layer knows not to replace last-good reviewRequests")
-  // C3: a parsed section's total rides along with it; the errored
-  // section's total is null exactly like the section itself.
+  // A parsed section's total rides along with it; the errored section's
+  // total is null exactly like the section itself.
   assert.strictEqual(mapped.openPRsTotal, 9)
   assert.strictEqual(mapped.reposTotal, 3)
   assert.strictEqual(mapped.reviewRequestsTotal, null)
@@ -536,7 +529,7 @@ test("mapDashboard: tolerates non-array `nodes` fields", function () {
   })
 })
 
-test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-review.md F2)", function () {
+test("mapDashboard: per-field string length is capped", function () {
   var hugeText = new Array(1024 * 1024 + 2).join("x")
   var hugeTag = new Array(10000).join("y")
   var mapped = Model.mapDashboard({
@@ -568,7 +561,7 @@ test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-
   assert.ok(mapped.myIssues[0].owner.length <= 100)
 })
 
-// ---------------------------------------------------- mapDashboard: repos F1/F2 fields
+// ---------------------------------------------------- mapDashboard: repos fields
 
 test("mapDashboard: repos gain stars/isArchived/isFork/isPrivate, strict boolean typing", function () {
   var mapped = Model.mapDashboard({
@@ -669,7 +662,7 @@ test("ownerFromNameWithOwner: adversarial/missing input never throws, empty on n
   assert.strictEqual(Model.ownerFromNameWithOwner("owner/repo/extra"), "owner")
 })
 
-test("isExternalOwner: case-insensitive comparison (exchange/19-feedback-delta-spec.md F6)", function () {
+test("isExternalOwner: case-insensitive comparison", function () {
   assert.strictEqual(Model.isExternalOwner("HalmyLyseas", "HalmyLyseas"), false)
   assert.strictEqual(Model.isExternalOwner("HALMYLYSEAS", "halmylyseas"), false)
   assert.strictEqual(Model.isExternalOwner("HalmyLyseas", "halmylyseas"), false)
@@ -686,7 +679,7 @@ test("isExternalOwner: missing owner or login defaults to non-external (no false
 
 // ---------------------------------------------------------------------- repoPill
 
-test("repoPill: priority order archived > fork > private (exchange/19-feedback-delta-spec.md F2), one pill max", function () {
+test("repoPill: priority order archived > fork > private, one pill max", function () {
   assert.strictEqual(Model.repoPill({ isArchived: true, isFork: false, isPrivate: false }), "archived")
   assert.strictEqual(Model.repoPill({ isArchived: false, isFork: true, isPrivate: false }), "fork")
   assert.strictEqual(Model.repoPill({ isArchived: false, isFork: false, isPrivate: true }), "private")
@@ -707,11 +700,10 @@ test("repoPill: defensive on missing/malformed input, never throws", function ()
   assert.strictEqual(Model.repoPill({ isArchived: "yes" }), "", "non-boolean truthy value must not count as true")
 })
 
-// sortRepos and its tests were removed by exchange/33-feedback3-delta-spec.md
-// H3 -- repos render in fetch order (GraphQL PUSHED_AT desc), sliced by
+// Repos render in fetch order (GraphQL PUSHED_AT desc), sliced by
 // repoLimit in Service.qml; no client-side sort layer remains.
 
-// ---------------------------------------------------------------------- lastComment (G2)
+// ---------------------------------------------------------------------- lastComment
 
 test("lastComment: extracts commenter/commentAt from the single comments(last: 1) node", function () {
   var c = Model.lastComment({ nodes: [{ author: { login: "octocat" }, updatedAt: "2026-08-27T10:00:00Z" }] })
@@ -750,10 +742,9 @@ test("lastComment: only the LAST node in the connection is used (last: 1 should 
   assert.strictEqual(c.commenter, "second")
 })
 
-// exchange/30-s16-delta-review.md F1: a real author with a missing/null/
-// malformed updatedAt must collapse BOTH fields to "" -- the pairing this
-// function's own header comment documents is symmetric, not just
-// commentAt-follows-commenter.
+// A real author with a missing/null/malformed updatedAt must collapse BOTH
+// fields to "" -- the pairing lastComment()'s own header documents is
+// symmetric, not just commentAt-follows-commenter.
 test("lastComment: present author, missing/null/non-string updatedAt -- BOTH fields collapse to empty, not just commentAt", function () {
   assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: { login: "octocat" }, updatedAt: null }] }), { commenter: "", commentAt: "" })
   assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: { login: "octocat" } }] }), { commenter: "", commentAt: "" })
@@ -761,7 +752,7 @@ test("lastComment: present author, missing/null/non-string updatedAt -- BOTH fie
   assert.deepStrictEqual(Model.lastComment({ nodes: [{ author: { login: "octocat" }, updatedAt: "" }] }), { commenter: "", commentAt: "" })
 })
 
-// ------------------------------------------------------------ subscribedFromViewerSubscription (G4)
+// ------------------------------------------------------------ subscribedFromViewerSubscription
 
 test("subscribedFromViewerSubscription: SUBSCRIBED -> true, anything else resolved -> false", function () {
   assert.strictEqual(Model.subscribedFromViewerSubscription("SUBSCRIBED"), true)
@@ -775,7 +766,7 @@ test("subscribedFromViewerSubscription: missing/null field fails OPEN (true) -- 
   assert.strictEqual(Model.subscribedFromViewerSubscription(null), true)
 })
 
-// ---------------------------------------------------------------------- matchesQuery (G1)
+// ---------------------------------------------------------------------- matchesQuery
 
 test("matchesQuery: case-insensitive substring match over title/repo/owner", function () {
   var item = { title: "Add Nujabes theme", repo: "HalmyLyseas/omarchy-nujabes-theme", owner: "HalmyLyseas" }
@@ -831,7 +822,7 @@ test("matchesQuery: query longer than QUERY_CAP is truncated before matching, ne
   assert.strictEqual(Model.matchesQuery({ title: "short" }, longQuery), false)
 })
 
-// ---------------------------------------------------------------------- filterIssues (G4)
+// ---------------------------------------------------------------------- filterIssues
 
 function fakeIssue(number, subscribed) {
   return { number: number, subscribed: subscribed }
@@ -967,14 +958,14 @@ test("isSafeGithubUrl: rejects a github.com URL used only as a substring/query t
   assert.strictEqual(Model.isSafeGithubUrl("https://evil.com/https://github.com/"), false)
 })
 
-// ------------------------------------------------ isSafeGithubUrl (adversarial, S5a F1)
+// ------------------------------------------------ isSafeGithubUrl (adversarial)
 
-test("isSafeGithubUrl: rejects the userinfo trick explicitly (exchange/11-s5a-security-review.md F1(c))", function () {
+test("isSafeGithubUrl: rejects the userinfo trick explicitly", function () {
   assert.strictEqual(Model.isSafeGithubUrl("https://github.com@evil.com/"), false)
   assert.strictEqual(Model.isSafeGithubUrl("https://user:pass@github.com/o/r"), false)
 })
 
-test("isSafeGithubUrl: rejects a literal newline right after the required prefix (exchange/11-s5a-security-review.md F1, MUST-cover case)", function () {
+test("isSafeGithubUrl: rejects a literal newline right after the required prefix", function () {
   assert.strictEqual(Model.isSafeGithubUrl("https://github.com/\n../evil"), false)
 })
 
@@ -1033,7 +1024,7 @@ test("classifyFailure: unrecognized shape falls back to generic error", function
 
 // ---------------------------------------------------------------- parseHeadersAndBody
 
-test("parseHeadersAndBody: real captured 200 notifications -i output (live-verified 2026-08-27)", function () {
+test("parseHeadersAndBody: real captured 200 notifications -i output", function () {
   var raw = fs.readFileSync(path.join(FIXTURES, "notifications-i-200.txt"), "utf8")
   var parsed = Model.parseHeadersAndBody(raw)
   assert.strictEqual(parsed.status, 200)
@@ -1161,12 +1152,12 @@ test("DASHBOARD_QUERY: pinned exact literal (G2 native rework -- was scripts/fet
   assert.strictEqual(Model.DASHBOARD_QUERY, expected)
   assert.ok(Model.DASHBOARD_QUERY.indexOf("mutation") === -1, "never a mutation")
   assert.ok(Model.DASHBOARD_QUERY.indexOf("repositories(first: 30") >= 0, "repositories window pinned at 30")
-  // C3: reviewRequestsTotal is read off this field -- pin its presence the
+  // reviewRequestsTotal is read off this field -- pin its presence the
   // same way the other three sections' totalCount is already pinned above.
   assert.ok(Model.DASHBOARD_QUERY.indexOf("    issueCount") >= 0, "reviewRequests search carries issueCount")
 })
 
-// -------------------------------------------------------------------- sanitizeEtag (B1)
+// -------------------------------------------------------------------- sanitizeEtag
 
 test("sanitizeEtag: passes through an ordinary quoted etag unchanged", function () {
   assert.strictEqual(Model.sanitizeEtag('"abc123"'), '"abc123"')
@@ -1189,7 +1180,7 @@ test("sanitizeEtag: defensive on missing/non-string input", function () {
   assert.strictEqual(Model.sanitizeEtag(123), "")
 })
 
-// --------------------------------------------------------- isNotificationsBodyValid (C4)
+// --------------------------------------------------------- isNotificationsBodyValid
 
 test("isNotificationsBodyValid: true only for status 200 + array body", function () {
   assert.strictEqual(Model.isNotificationsBodyValid({ status: 200, body: [] }), true)

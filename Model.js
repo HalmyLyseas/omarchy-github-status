@@ -1,49 +1,21 @@
 // Model.js -- pure data-mapping library for halmylyseas.github-status.
-//
-// No Quickshell imports, no QML types, no mutable module-level state that
-// depends on a shared-singleton instance -- every exported symbol here is a
-// plain function of its arguments. That is what makes this file loadable
-// two different ways:
-//   1. As a QML JS module: `import "Model.js" as Model` from Service.qml,
-//      BarWidget.qml, Panel.qml. `.pragma library` is deliberately omitted
-//      (see ~/.config/omarchy/plugins/halmylyseas.ristretto/Model.js for the
-//      precedent that DOES need it, because it holds shared read-only
-//      constant tables referenced identically from multiple importers --
-//      this file has no such state, so each importer getting its own copy
-//      of these functions is harmless).
-//   2. As a Node CommonJS module via the guarded `module.exports` block at
-//      the end of this file, so `test/model.test.js` can `require()` it
-//      directly with plain Node, no QML runtime involved.
-//
-// Every mapper here is defensive: null/missing/malformed input produces an
-// empty result (never a thrown exception), and every list output is capped
-// per the security invariant in exchange/06-design.md #8 (a pathological
-// account -- thousands of notifications, repos, etc. -- must not be able to
-// blow up the panel). Mappers never sanitize/mutate string content (that is
-// the UI's job via Text.PlainText); they only ever produce plain JS
-// objects/strings, never eval or execute anything.
+// No Quickshell/QML dependency, so plain Node can require() it directly
+// (see docs/developers.md, "Architecture"); every list output is capped.
 
 var CAP_NOTIFICATIONS = 50
 var CAP_PRS = 20
 var CAP_REVIEW_REQUESTS = 20
 var CAP_REPOS = 30
-var CAP_MY_ISSUES = 20  // exchange/19-feedback-delta-spec.md F3 -- same cap shape as reviewRequests
+var CAP_MY_ISSUES = 20  // same cap shape as reviewRequests
 
-// Per-field string-length caps (exchange/11-s5a-security-review.md F2): list
-// LENGTH is already capped above; this bounds individual field length too,
-// so a pathological/compromised remote field (title, headline, url, ...)
-// can't grow the panel's memory/re-render cost unboundedly. Real GitHub API
-// data never approaches these (issue/PR titles are server-capped ~256
-// chars); this is defense-in-depth against a future API change, a
-// misconfigured `gh` host, or a new field added later without the same
-// care -- not a response to an observed real-world payload.
+// Per-field length caps, independent of the list-length caps above: bounds
+// a single field's cost even though real GitHub data never approaches these
+// (defense-in-depth against a future API/host change, not an observed issue).
 var FIELD_CAP_TEXT = 300    // titles / commit headlines
 var FIELD_CAP_TAG = 100     // reasons / repo identifiers / release tags / timestamps
 var FIELD_CAP_URL = 2048    // urls
-// exchange/26-feedback2-delta-spec.md G2/G1: lastCommenter login cap (a
-// GitHub login is already server-capped well under this); the search query
-// cap is generous enough for any real typed query while still bounding a
-// pathological/huge query string's cost in matchesQuery's per-item scan.
+// lastCommenter is already GitHub-login-length-capped well under this; the
+// query cap bounds matchesQuery's per-item scan cost against a huge paste.
 var FIELD_CAP_COMMENTER = 40
 var QUERY_CAP = 100
 
@@ -79,7 +51,7 @@ function truncate(v, maxLen, fallback) {
   return s.length > maxLen ? s.slice(0, maxLen) : s
 }
 
-// ------------------------------------------------------------- own vs external (F6)
+// ------------------------------------------------------------- own vs external
 
 // "owner/repo" (GraphQL nameWithOwner, or REST full_name -- same shape) ->
 // just the owner segment. "" on anything that doesn't contain a "/" with
@@ -90,12 +62,9 @@ function ownerFromNameWithOwner(nameWithOwner) {
   return idx > 0 ? s.slice(0, idx) : ""
 }
 
-// exchange/19-feedback-delta-spec.md F6: a row is "external" when its repo's
-// owner segment differs from the viewer's own login, compared
-// case-insensitively (GitHub logins/org names are case-insensitive; "Foo"
-// and "foo" are the same account). Defensively conservative when either side
-// is missing/unknown: an owner or login we can't determine is never flagged
-// external (no pill is safer than a wrong pill from a false positive).
+// A row is "external" when its repo's owner differs from the viewer's own
+// login, compared case-insensitively (GitHub logins are case-insensitive).
+// An unknown owner or login is never flagged external (fail-safe default).
 function isExternalOwner(owner, login) {
   var o = safeStr(owner, "")
   var l = safeStr(login, "")
@@ -105,23 +74,9 @@ function isExternalOwner(owner, login) {
 
 // ----------------------------------------------------- URL translation
 
-// api.github.com REST subject -> a github.com web URL, string-rewrite only
-// (never an extra network call -- see exchange/04-github-data.md #2).
-// `subject` is the {type, url} shape the notifications API and our own
-// mapped list items use. Returns "" when the subject type/url doesn't match
-// a known pattern -- the caller is expected to fall back to the containing
-// repository's html_url in that case.
-//
-// Hardened per exchange/11-s5a-security-review.md F1: owner/repo are
-// restricted to the real GitHub identifier charset ([A-Za-z0-9_.-]+, no
-// slash/control chars/whitespace can sneak through), and the trailing ID
-// segment is captured loosely only long enough to be validated below
-// against a charset specific to its API segment (numeric ID for
-// issues/pulls/releases/discussions, hex SHA for commits) -- never the
-// unbounded/unfiltered `(.+)$` the finding flagged. A crafted
-// `.../pulls/1; rm -rf /` (the finding's own example) already fails to
-// match at all (the embedded "/" breaks the `[^\/]+` rest capture before ID
-// validation even runs).
+// api.github.com REST subject -> a github.com web URL, string-rewrite only,
+// never an extra network call. owner/repo/id are all charset-validated
+// (no slash/control chars) before the URL is built; "" on no match.
 var API_URL_RE = /^https:\/\/api\.github\.com\/repos\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(issues|pulls|releases|discussions|commits)\/([^\/]+)$/
 var SEGMENT_TO_WEB = {
   issues: "issues",
@@ -157,16 +112,8 @@ function apiUrlToWebUrl(subject) {
 // ----------------------------------------------------------- notifications
 
 // Raw shape: array of { id, unread, reason, subject: {title, url, type},
-// repository: {full_name, html_url}, updated_at }. See
-// exchange/samples/notifications.json.
-//
-// `login` (exchange/19-feedback-delta-spec.md F6): the REST notifications
-// API has no `viewer`-shaped field to read the account's own login from --
-// unlike mapDashboard's GraphQL envelope, which carries `viewer.login`
-// alongside the data it maps -- so the caller (Service.qml) passes in the
-// login it separately learned from scripts/probe-auth's stdout. Optional:
-// omitting it (or passing anything falsy) makes every item non-external
-// (isExternalOwner's conservative default), never a thrown error.
+// repository: {full_name, html_url}, updated_at }. `login`, when passed,
+// marks external rows; omitted, every row reads as non-external instead.
 function mapNotifications(json, login) {
   if (!isArray(json)) return []
   var out = []
@@ -194,19 +141,9 @@ function mapNotifications(json, login) {
   return out
 }
 
-// exchange/23-s11-delta-review.md F2: re-derives `isExternal` for an
-// already-mapped notifications array without re-fetching or re-parsing the
-// raw REST payload (Service.qml never retains that past
-// handleNotificationsExit -- only the mapped list survives in
-// internal.notifications). Every mapped item already carries its own
-// `owner` field (computed independent of `login`, straight off the repo's
-// nameWithOwner), so this is a pure, cheap re-derivation over data already
-// in memory -- used once, the moment internal.login transitions from
-// unknown to known via the opportunistic dashboard-response capture (see
-// Service.qml's handleDashboardExit), so already-fetched inbox rows don't
-// have to wait out a full notificationsIntervalSec poll to gain a correct
-// owner pill. Manual field copy, not Object.assign -- this file stays
-// ES5-compatible (see header comment) so plain Node can require() it.
+// Re-derives isExternal for an already-mapped notifications array without
+// re-fetching -- used once, when login becomes known after notifications
+// were already fetched with it unknown. Manual field copy keeps this ES5.
 function remapNotificationsExternal(list, login) {
   if (!isArray(list)) return []
   var out = []
@@ -247,19 +184,11 @@ function ciRollupToState(rollup) {
   }
 }
 
-// -------------------------------------------------------- last comment (G2)
+// -------------------------------------------------------- last comment
 
-// `comments(last: 1)` GraphQL connection -> { commenter, commentAt }, both
-// "" when there is no comment at all, OR when the most recent comment's
-// `author` is null. A null author is a genuine, documented GraphQL shape --
-// a comment left by a since-deleted GitHub account -- not a malformed
-// response (exchange/26-feedback2-delta-spec.md G2's explicit "handle it"
-// note). Returned as one paired result rather than two independently-
-// defensive fields: showing an age with no attributable login ("last
-// comment: · 3d") would misrepresent who commented, and the UI's own
-// contract (omit the tooltip line entirely when lastCommenter is "")
-// already treats the two as a single unit -- so commentAt collapses to ""
-// right alongside commenter whenever there's nothing attributable to show.
+// `comments(last: 1)` -> { commenter, commentAt }, both "" when there is no
+// comment, or its author is a since-deleted account (a real GraphQL shape,
+// not malformed). Returned as one pair since a login-less age is misleading.
 function lastComment(commentsConn) {
   var empty = { commenter: "", commentAt: "" }
   if (!isObject(commentsConn) || !isArray(commentsConn.nodes) || commentsConn.nodes.length === 0) return empty
@@ -269,10 +198,8 @@ function lastComment(commentsConn) {
   var login = author ? safeStr(author.login, "") : ""
   if (!login) return empty
   var commentAt = truncate(node.updatedAt, FIELD_CAP_TAG)
-  // A missing/null/non-string updatedAt degrades to "" via safeStr's
-  // fallback -- collapse commenter to "" alongside it too, so the pairing
-  // this function documents above is actually symmetric in code, not just
-  // in this comment (exchange/30-s16-delta-review.md F1).
+  // A missing/null updatedAt degrades to "" -- collapse commenter alongside
+  // it too, so the pairing this function returns stays symmetric in code.
   if (!commentAt) return empty
   return {
     commenter: truncate(login, FIELD_CAP_COMMENTER),
@@ -280,16 +207,11 @@ function lastComment(commentsConn) {
   }
 }
 
-// ---------------------------------------------------------- subscribed (G4)
+// ---------------------------------------------------------- subscribed
 
-// GraphQL's `viewerSubscription` enum on an Issue: "SUBSCRIBED" |
-// "UNSUBSCRIBED" | "IGNORED" (a repo-level "mute", rare from this account's
-// own issues but defended the same as UNSUBSCRIBED -- neither means "I want
-// to keep seeing this by default"). exchange/26-feedback2-delta-spec.md G4:
-// fail OPEN (true) on a missing/null field specifically -- a schema hiccup
-// or an older/partial response must never silently hide the user's own
-// issues -- but a field that resolved to anything other than exactly
-// "SUBSCRIBED" is trusted as a real "not subscribed" signal.
+// GraphQL's viewerSubscription enum: "SUBSCRIBED" | "UNSUBSCRIBED" | "IGNORED".
+// Fails OPEN (true) on a missing/null field -- a schema hiccup must never
+// silently hide the user's own issues; anything else means "not subscribed".
 function subscribedFromViewerSubscription(viewerSubscription) {
   if (viewerSubscription === undefined || viewerSubscription === null) return true
   return viewerSubscription === "SUBSCRIBED"
@@ -355,14 +277,9 @@ function mapReviewRequests(login, nodes) {
   return reviewRequests
 }
 
-// exchange/19-feedback-delta-spec.md F3: issues the viewer opened, any repo,
-// open state -- same shape/cap/truncation discipline as mapReviewRequests,
-// plus the F6 isExternal/owner marking every other row type gets.
-//
-// exchange/26-feedback2-delta-spec.md G2/G4: also gains lastCommenter/
-// lastCommentAt (see lastComment() above) and `subscribed` (see
-// subscribedFromViewerSubscription() above) -- the field the G4 Focus/All
-// toggle filters on (filterIssues()).
+// Issues the viewer opened, any repo, open state -- same shape/cap
+// discipline as mapReviewRequests, plus lastCommenter/lastCommentAt and
+// `subscribed` (the field the Focus/All toggle filters on, filterIssues()).
 function mapMyIssues(login, nodes) {
   var arr = isArray(nodes) ? nodes : []
   var myIssues = []
@@ -406,13 +323,9 @@ function mapRepos(login, nodes) {
       releaseTag: release ? truncate(release.tagName, FIELD_CAP_TAG) : "",
       releaseUrl: release ? truncate(release.url, FIELD_CAP_URL) : "",
       lastCommitHeadline: branchTarget ? truncate(branchTarget.messageHeadline, FIELD_CAP_TEXT) : "",
-      // F1/F2 (exchange/19-feedback-delta-spec.md): stars is a bare int, no
-      // string cap needed (it can never grow the panel's memory/render cost
-      // the way a string field could -- it renders as at most a handful of
-      // digits regardless of magnitude); isArchived/isFork/isPrivate are
-      // already fetched by the query (unused, until now) and only ever
-      // GraphQL-typed booleans, so a strict `=== true` check is enough
-      // defense against a malformed/partial node.
+      // stars is a bare int, no string cap needed; isArchived/isFork/
+      // isPrivate are always GraphQL-typed booleans, so a strict `=== true`
+      // check is enough to guard a malformed node.
       stars: safeNum(r.stargazerCount, 0),
       isArchived: r.isArchived === true,
       isFork: r.isFork === true,
@@ -422,10 +335,8 @@ function mapRepos(login, nodes) {
   return repos
 }
 
-// F2: one status pill per repo row, priority archived > fork > private (an
-// archived fork of a private-visibility... well, archived still wins if
-// several happen to be true at once -- "Public archive" is the state GitHub
-// itself foregrounds first on a repo's own page). "" means no pill.
+// One status pill per repo row, priority archived > fork > private -- the
+// same state GitHub itself foregrounds first on a repo's own page. "" = none.
 function repoPill(repo) {
   if (!isObject(repo)) return ""
   if (repo.isArchived === true) return "archived"
@@ -434,30 +345,15 @@ function repoPill(repo) {
   return ""
 }
 
-// exchange/33-feedback3-delta-spec.md H3: the F1 client-side repo sort
-// (activity/stars toggle) is removed entirely -- repos render in fetch
-// order (GraphQL PUSHED_AT desc, scripts/fetch-dashboard's own query
-// order), sliced by repoLimit in Service.qml. `stars` (mapRepos below,
-// still sourced from `stargazerCount`) is unused now but left in the
-// mapped shape -- it's harmless dead data, not worth a wider-scope removal
-// across the GraphQL query/fetch script/fixtures for a field that costs
-// nothing to keep.
+// Repos render in fetch order (GraphQL PUSHED_AT desc), sliced by repoLimit
+// in Service.qml -- no client-side sort layer. `stars` is unused by the UI
+// but kept in the mapped shape; harmless to leave rather than thread out.
 
-// ------------------------------------------------------- search + filter (G1/G4)
+// ------------------------------------------------------- search + filter
 
-// exchange/26-feedback2-delta-spec.md G1: case-insensitive substring match
-// used by the panel-side search field to live-filter every section's already
-// -rendered rows -- pure and generic over whichever of `title`/`repo`/
-// `owner`/`name` a given item shape actually carries (PR/review-request/
-// issue rows have title+repo+owner; repo-activity rows have name only; a
-// field the item doesn't have is simply skipped, never a thrown error).
-// Empty/whitespace-only query matches everything (the "no filter active"
-// state). `query` is capped to QUERY_CAP *characters* (not bytes) before
-// comparison -- generous for any real typed input, but keeps a pathological
-// huge query string from turning every row's substring scan into needless
-// work; slicing a JS string mid-surrogate-pair is a real edge case for exotic
-// unicode (emoji, some CJK extension characters) but a mid-cap slice search
-// still resolves to a defensible substring match, never a throw.
+// Case-insensitive substring match over whichever of title/repo/owner/name
+// a given item shape actually has; empty/whitespace query matches
+// everything. `query` is capped at QUERY_CAP chars before comparing.
 function matchesQuery(item, query) {
   var q = isString(query) ? query.slice(0, QUERY_CAP).trim().toLowerCase() : ""
   if (!q) return true
@@ -470,55 +366,18 @@ function matchesQuery(item, query) {
   return false
 }
 
-// exchange/26-feedback2-delta-spec.md G4: "focus" (default) keeps only
-// myIssues rows the viewer is still subscribed to (`subscribed !== false` --
-// deliberately not `=== true`, so a hand-built/older item missing the field
-// entirely fails open the same way mapMyIssues's own
-// subscribedFromViewerSubscription() does, rather than being silently
-// dropped by a stricter equality check); "all" is a pass-through copy.
-// Any mode other than exactly "all" (including missing/garbage) is treated
-// as "focus" -- a permissive default-on-garbage-input shape, same idea
-// validIssuesFilter() in Service.qml uses for the setter side. Always
-// returns a NEW array, never mutates `issues`.
+// "focus" (default) keeps myIssues rows still subscribed (`subscribed !==
+// false`, so a legacy item missing the field fails open); "all" is a
+// pass-through copy. Any other mode is treated as "focus". Never mutates.
 function filterIssues(issues, mode) {
   var arr = isArray(issues) ? issues : []
   if (mode === "all") return arr.slice()
   return arr.filter(function (i) { return isObject(i) && i.subscribed !== false })
 }
 
-// Raw shape: the parsed body of the mega GraphQL query
-// (exchange/04-github-data.md #6 / exchange/samples/mega-graphql.json):
-// { data: { viewer: { openPRs: {nodes:[...]}, repositories: {nodes:[...]},
-//           myIssues: {nodes:[...]} }, reviewRequests: { nodes: [...] } } }
-//
-// Per-section contract (exchange/12-s5b-correctness-review.md F4): GraphQL
-// allows a response to carry `data` for the fields that resolved AND
-// `errors` for the ones that didn't in the SAME envelope (GitHub's `search`
-// -- used for reviewRequests -- has its own stricter rate-limit bucket
-// separate from the object-graph API, so it's realistic for reviewRequests
-// to error out while openPRs/repositories/myIssues succeed in the same
-// call). Each of the four returned sections is either a mapped array (the
-// source field was present as an object in `data`, however many/few nodes
-// it had -- an empty array is a legitimate "genuinely nothing here", not
-// "unusable") or `null`, which is the explicit "this section did not
-// resolve -- caller must NOT replace its last-good value" signal
-// (exchange/19-feedback-delta-spec.md extends this same contract to the new
-// myIssues section). A whole-envelope failure (non-object `json`,
-// missing/non-object `json.data`) returns all four as null, which is the
-// correct "nothing usable" case the caller treats as a full fetch failure.
-//
-// `login` (exchange/23-s11-delta-review.md F2): also returned, always a
-// string ("" when unresolvable) -- never null, unlike the four section
-// keys, since it isn't subject to the same partial-envelope replace
-// contract. This lets Service.qml opportunistically learn internal.login
-// from an ordinary dashboard response's own viewer.login field when the
-// auth probe itself never got the chance to (its first attempt failed
-// non-auth, or timed out into the watchdog) -- see handleDashboardExit.
-// C3: each section's real GraphQL total (`totalCount` on the object-graph
-// connections, `issueCount` on the `search` connection used for
-// reviewRequests) rides alongside its mapped array, `null` exactly when
-// that section itself is `null` -- same per-section replace contract, so
-// Service.qml only ever applies a total together with the list it counts.
+// Each of the four sections below is a mapped array (nodes present, however
+// many) or null -- the field didn't resolve, caller must not replace
+// last-good data. `login` and each *Total field ride alongside, per-section.
 function mapDashboard(json) {
   var result = {
     openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "",
@@ -550,12 +409,9 @@ function mapDashboard(json) {
   return result
 }
 
-// `viewer.repositories.nodes[].name` in the mega query is a bare repo name
-// (no owner), so repo.url needs `viewer.login` joined in -- both are
-// present in the same top-level query response, which is why mapDashboard
-// can build a correct web URL itself rather than pushing "owner/name"
-// string-building duty onto Service.qml. Exposed as a small named helper
-// (not inlined) so it has its own test coverage.
+// `repositories.nodes[].name` in the query is a bare repo name (no owner),
+// so this joins in `viewer.login` (present in the same response) to build
+// a correct web URL. A named helper, not inlined, so it has its own test.
 function repoWebUrl(login, repoName) {
   if (!isString(login) || !login || !isString(repoName) || !repoName) return ""
   return "https://github.com/" + login + "/" + repoName
@@ -587,27 +443,14 @@ function relativeTime(iso, nowMs) {
 
 // ------------------------------------------------------------------ safety
 
-// Only ever true for a genuine https://github.com/... URL. Deliberately a
-// plain prefix check (anchored regex), not a hostname parse, so it has no
-// dependency on a URL-parsing global that may not exist in the QML JS
-// engine. "https://github.com.evil.com/..." fails because the character
-// right after the literal "github.com" must be "/", never ".". The
-// userinfo trick ("https://github.com@evil.com/...") is also already
-// rejected by this same prefix requirement: the character immediately
-// after "github.com" there is "@", not "/", so it never matches either --
-// asserted with an explicit test in test/model.test.js per
-// exchange/11-s5a-security-review.md F1.
+// True only for a genuine https://github.com/... URL: a plain anchored
+// prefix check (no URL-parsing global needed) where the char right after
+// "github.com" must be "/", so neither a lookalike domain nor userinfo matches.
 var SAFE_GITHUB_URL_RE = /^https:\/\/github\.com\//
 
-// Hardened per exchange/11-s5a-security-review.md F1: the plain prefix
-// check above has no `$` anchor and no character-class restriction on what
-// follows the required prefix, so a string like
-// "https://github.com/\n../evil" (a literal newline right after the
-// prefix) used to pass. This is the last allowlist gate before
-// Quickshell.execDetached(["xdg-open", url]) in Service.qml, so it now also
-// rejects any control character or whitespace anywhere in the string, and
-// caps overall length -- defense-in-depth on top of execDetached's own
-// array-form (no shell reparse) call shape.
+// The prefix check alone has no length/charset limit on what follows, so a
+// literal newline right after it used to pass -- this also rejects any
+// control character or whitespace, and the caller caps overall length.
 var CONTROL_OR_WHITESPACE_RE = /[\x00-\x20\x7f]/
 
 function isSafeGithubUrl(url) {
@@ -620,10 +463,9 @@ function isSafeGithubUrl(url) {
 
 // ------------------------------------------------------------- failure shapes
 
-// Classifies a failed `gh` invocation using the exact observed shapes from
-// exchange/04-github-data.md #7. Order matters: check the most specific
-// signal first so e.g. a 401 body that also happens to mention "timeout"
-// text somewhere doesn't get misclassified.
+// Classifies a failed `gh` invocation by its observed stderr/exit shape.
+// Order matters: the most specific signal is checked first, so a 401 body
+// that also happens to mention "timeout" doesn't get misclassified.
 function classifyFailure(stderrText, exitCode) {
   var text = safeStr(stderrText, "")
 
@@ -649,9 +491,8 @@ function classifyFailure(stderrText, exitCode) {
 // ------------------------------------------------------------- gh argv/etag
 
 // Verbatim GraphQL query text sent as `-f query=<this>` to a direct `gh`
-// child (G2 native rework) -- previously lived in scripts/fetch-dashboard's
-// heredoc. Kept as one array of lines, joined, so a diff on this file shows
-// exactly which line of the query changed.
+// child. Kept as an array of lines, joined, so a diff shows exactly which
+// line of the query changed.
 var DASHBOARD_QUERY = [
   "query {",
   "  viewer {",
@@ -701,10 +542,9 @@ var DASHBOARD_QUERY = [
   "}"
 ].join("\n")
 
-// Only `[!-~]` (printable ASCII, no space/control) survives, capped at 128
-// chars -- an ETag is the one remote-derived value that becomes its own
-// argv element (`-H "If-None-Match: " + etag`), so it's sanitised before
-// that, not just length-capped (B1).
+// Only printable ASCII survives, capped at 128 chars -- an ETag becomes
+// its own argv element (`-H "If-None-Match: " + etag`), so it's sanitised
+// before that, not just length-capped.
 var ETAG_SAFE_RE = /[!-~]/
 function sanitizeEtag(etag) {
   var s = safeStr(etag, "")
@@ -715,21 +555,18 @@ function sanitizeEtag(etag) {
   return out
 }
 
-// C4: an exit-0 notifications response is only trusted when it actually
-// carries a 200 status line and an array body -- anything else (a
-// malformed envelope, an unexpected status) must be treated as a failure
-// that keeps the last-good data, not silently mapped to an empty list.
+// An exit-0 notifications response is only trusted with a 200 status and
+// an array body -- anything else is a failure that keeps last-good data,
+// never silently mapped to an empty list.
 function isNotificationsBodyValid(parsed) {
   return isObject(parsed) && parsed.status === 200 && isArray(parsed.body)
 }
 
 // ------------------------------------------------------ headers + body parse
 
-// Parses the combined output of `gh api -i ...`: an HTTP status line, a
-// block of "Header: value" lines (observed CRLF-terminated; the status line
-// itself is LF-terminated -- normalize both), a blank line, then the body
-// (absent entirely on a 304). Never throws: a body that fails JSON.parse
-// (or is empty) yields `body: null`.
+// Parses `gh api -i ...`'s combined output: status line, "Header: value"
+// lines (CRLF; the status line itself is LF -- normalize both), a blank
+// line, then the body. Never throws: an unparseable/empty body -> null.
 function parseHeadersAndBody(rawStdout) {
   var result = { status: 0, etag: "", body: null }
   var raw = safeStr(rawStdout, "")
@@ -799,20 +636,9 @@ function summaryTooltip(state) {
 
 // ------------------------------------------------------------- settings persistence
 
-// `shell.updateEntryInline(moduleName, settings)` (the first-party host
-// helper, /usr/share/omarchy/shell/shell.qml) REPLACES the whole plugin
-// settings entry with `{id}` plus exactly the keys `settings` hands it --
-// it does not merge onto whatever is already stored. A caller that passes
-// only the one key it wants to change silently drops every other setting
-// the entry held (the precedent this mirrors:
-// ~/.config/omarchy/plugins/halmylyseas.ristretto/Model.js's
-// `mergedSettings`, same trap, same fix). Always build the full next-state
-// object from `current` (the plugin's existing settings entry, or any
-// falsy value for "no entry yet") first, so a single-setting write like
-// `setIssuesFilter` can never clobber `dashboardIntervalSec`/`repoLimit`/etc.
-// The `id` key is stripped from `current` even if present -- the host adds
-// it back itself, keyed off the moduleName argument, not off anything in
-// this object.
+// shell.updateEntryInline REPLACES the whole settings entry with exactly
+// the keys handed to it -- it does not merge. Build the full next-state
+// object from `current` first so one changed key never drops the rest.
 function mergedSettings(current, key, value) {
   var next = {}
   if (isObject(current)) {
