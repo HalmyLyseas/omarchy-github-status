@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# test/all -- runs every test suite in this repo: Node unit tests over
-# Model.js, the QML Text-sink audit, test/probe/run (the mock-gh service
-# probe suite driving the real Service.qml), then test/probe/run-ui (the
-# UI probe driving the real BarWidget/Panel). Exits non-zero if any suite
-# fails.
+# test/all -- runs every test suite in this repo (Node unit tests, the QML
+# Text-sink audit, both probe suites); exits non-zero if any suite fails.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +13,11 @@ if [[ $? -ne 0 ]]; then overall=1; fi
 echo
 echo "== qml-sinks.test.js (node) =="
 node "$SCRIPT_DIR/qml-sinks.test.js"
+if [[ $? -ne 0 ]]; then overall=1; fi
+
+echo
+echo "== comment-hygiene.test.js (node) =="
+node --test "$SCRIPT_DIR/comment-hygiene.test.js"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo

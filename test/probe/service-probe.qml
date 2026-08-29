@@ -3,10 +3,8 @@ import Quickshell
 import Quickshell.Io
 
 // Loads the real Service.qml, waits for its process queue to settle, drives
-// one env-selected scenario, and prints a single "PROBE_RESULT {...}" JSON
-// line. Recovery scenarios drive their own small helper Processes (mode-file
-// writes, symlink create/remove) rather than relying on the outer bash
-// harness touching anything while qs is running.
+// one env-selected scenario, and prints a single "PROBE_RESULT {...}" line.
+// Recovery scenarios drive their own helper Processes, not the bash harness.
 ShellRoot {
   id: probeRoot
 
@@ -138,9 +136,8 @@ ShellRoot {
       })
     } else if (scenario === "rate-limited-resume") {
       // Only notifications' -i output carries a real X-Ratelimit-Reset
-      // header to parse -- dashboard/probe failures always fall back to a
-      // fixed +60min window in real `gh` output too, so this scenario
-      // targets notifications specifically.
+      // header -- dashboard/probe failures always fall back to a fixed
+      // +60min window, so this scenario targets notifications specifically.
       _waitUntil(6000, function () {
         return service._notificationsRateLimitedUntilMs > 0 && Date.now() > service._notificationsRateLimitedUntilMs
       }, function () {
@@ -198,7 +195,7 @@ ShellRoot {
       reviewRequestsLength: (service.reviewRequests || []).length,
       myIssuesLength: (service.myIssues || []).length,
       reposLength: (service.repos || []).length,
-      // C3: the fixture's totalCount/issueCount values are set above every
+      // The fixture's totalCount/issueCount values are set above every
       // section's own cap/window, so the "ok" scenario's assertions in
       // test/probe/run exercise the real "N of T" gap, not a coincidence.
       openPRsTotal: service.openPRsTotal,

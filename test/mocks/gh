@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 # test/mocks/gh -- PATH/absolute-path-shadowing mock of the `gh` CLI, driven
-# entirely by argv (Service.qml's G2 native rework spawns `gh` as a direct
-# Process child, never through a script). GH_MOCK_MODE picks the behavior;
-# GH_MOCK_MODE_FILE, when set and non-empty, overrides it per-invocation so
-# a running probe can flip mode mid-session (recovery scenarios). GH_MOCK_LOG
-# records one line per invocation (pid/mode/argv) for orphan checks and for
-# asserting the ETag actually sent on a later notifications call.
+# entirely by argv. GH_MOCK_MODE picks the behavior; GH_MOCK_MODE_FILE
+# overrides it per invocation so a running probe can flip mode mid-session.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"

@@ -2,11 +2,9 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 
-// Instantiates the REAL BarWidget.qml (which eagerly loads the REAL
-// Panel.qml itself) against a stub bar/shell, and the REAL Service.qml
-// against the mock `gh` (same ghPath-override mechanism
-// test/probe/service-probe.qml uses). Drives one env-selected scenario and
-// prints one "PROBE_RESULT {...}" line for run-ui to grep.
+// Instantiates the REAL BarWidget.qml (which eagerly loads Panel.qml) against
+// a stub bar/shell, and the REAL Service.qml against the mock `gh`. Drives
+// one env-selected scenario and prints one "PROBE_RESULT {...}" line.
 ShellRoot {
   id: probeRoot
 
@@ -22,11 +20,9 @@ ShellRoot {
 
   function panel() { return barWidget ? barWidget._debugPanelItem : null }
 
-  // Every property/method a real `shell` object needs to answer for both
-  // roles it plays here: BarWidget/Panel's `bar.shell.serviceFor(id)`, and
-  // Service.qml's own injected `shell.shellConfig`/`shell.updateEntryInline`
-  // (Service is a singleton, injected `shell` directly -- it never sees
-  // `bar` at all).
+  // Answers both roles a real `shell` plays here: BarWidget/Panel's
+  // `bar.shell.serviceFor(id)`, and Service.qml's own injected
+  // `shell.shellConfig`/`shell.updateEntryInline`.
   QtObject {
     id: stubShell
     property var svcInstance: null
@@ -38,10 +34,8 @@ ShellRoot {
     }
   }
 
-  // Every property/method BarIconButton/WidgetButton (Ui/WidgetButton.qml)
-  // and KeyboardPanel (Ui/KeyboardPanel.qml) read off `bar` -- a name
-  // missing here is a TypeError the moment the real widget/panel touches
-  // it.
+  // Every property/method BarIconButton/KeyboardPanel read off `bar` -- a
+  // name missing here is a TypeError the moment the real widget touches it.
   QtObject {
     id: stubBar
     property color foreground: "#e6e6e6"
@@ -155,9 +149,8 @@ ShellRoot {
   }
 
   // Depth-first search for a descendant whose `propName` matches
-  // `propValue` -- how a specific SectionHeader is identified from outside
-  // (its own `text` label), since a plain QML Item has no id reachable
-  // from a separately-loaded file.
+  // `propValue` -- how a SectionHeader is identified by its `text` label
+  // from outside, since a QML Item has no id reachable across files.
   function findByProp(item, propName, propValue) {
     if (!item) return null
     if (propName in item && item[propName] === propValue) return item
@@ -169,10 +162,9 @@ ShellRoot {
     return null
   }
 
-  // Every section in Panel.qml is `Column { SectionHeader {...}; Column {
-  // visible: !collapsed; Repeater {...} } }` -- given the header, its
-  // parent's second child is the row-list Column, whose only child is the
-  // Repeater.
+  // Every section is `Column { SectionHeader {...}; Column { visible:
+  // !collapsed; Repeater {...} } }` -- given the header, its parent's
+  // second child is the row-list Column.
   function sectionRows(header) {
     if (!header || !header.parent || !header.parent.children || header.parent.children.length < 2) return null
     return header.parent.children[1]
@@ -180,11 +172,9 @@ ShellRoot {
   function sectionRepeater(header) {
     var rows = sectionRows(header)
     if (!rows || !rows.children) return null
-    // A Repeater reparents its delegates as siblings of itself in its own
-    // parent's children list (Qt's documented behavior), so the Repeater
-    // is not reliably at a fixed index once it has 1+ delegates -- find it
-    // by its own `count`/`model` properties instead (same idiom as a
-    // by-content Repeater search).
+    // A Repeater reparents its delegates as siblings of itself, so it isn't
+    // reliably at a fixed index once it has 1+ delegates -- find it by its
+    // own `count`/`model` properties instead.
     for (var i = 0; i < rows.children.length; i++) {
       var c = rows.children[i]
       if (c && c.count !== undefined && c.model !== undefined) return c
@@ -204,10 +194,8 @@ ShellRoot {
   }
 
   // (1) ok: every section renders (Repeater counts match the fixture after
-  // caps/filters), pills read "N of T" wherever the fixture's totalCount/
-  // issueCount exceeds the rendered count (C3), and the bar's
-  // unreadCount/hasAttention/tooltipSummary read correctly off the real
-  // Service.
+  // caps/filters), pills read "N of T" where totalCount/issueCount exceeds
+  // the rendered count, and the bar's derived properties read correctly.
   function scenarioOk() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
@@ -240,10 +228,8 @@ ShellRoot {
     })
   }
 
-  // (2) degraded ladder: whichever GH_MOCK_MODE/ghPath setup run-ui chose
-  // for this run (unauthenticated / offline / rate-limited / no-gh), read
-  // the resulting statusHint/statusHintSevere/heroMeta straight off the
-  // real Panel.
+  // (2) degraded ladder: whichever GH_MOCK_MODE/ghPath run-ui chose, read
+  // the resulting statusHint/statusHintSevere/heroMeta off the real Panel.
   function scenarioDegraded() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
@@ -255,8 +241,7 @@ ShellRoot {
     })
   }
 
-  // (3) partial (C2 surface): hero meta gains "· partial", the status hint
-  // gains its own extra line.
+  // (3) partial: hero meta gains "· partial", the status hint gains a line.
   function scenarioPartial() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
@@ -267,10 +252,8 @@ ShellRoot {
     })
   }
 
-  // (4) search: root.searchQuery (a plain, externally-writable property)
-  // narrows every filtered list; a section's rendered pill follows the
-  // narrowed count and drops "N of T" while a query is active (Panel
-  // suppresses `total` to 0 during search).
+  // (4) search: root.searchQuery narrows every filtered list; a rendered
+  // pill follows the narrowed count and drops "N of T" while active.
   function scenarioSearch() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
@@ -289,9 +272,8 @@ ShellRoot {
     })
   }
 
-  // (5) fold: root.openPRsCollapsed (also plain/externally-writable) hides
-  // the section's own row-list Column -- proven against the ACTUAL
-  // rendered tree, not just the backing boolean.
+  // (5) fold: root.openPRsCollapsed hides the section's row-list Column --
+  // proven against the actual rendered tree, not just the backing boolean.
   function scenarioFold() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
@@ -311,11 +293,9 @@ ShellRoot {
     })
   }
 
-  // (6) svc -> null -> new instance: unlike mullvad's Loader-gated panel,
-  // BarWidget/Panel here are never destroyed -- `svc` is a LIVE reactive
-  // read of shell.serviceFor(id), so this proves that read degrading to
-  // null and then to a fresh instance never throws (Panel null-guards
-  // every read -- see its own file-header comment).
+  // (6) svc -> null -> new instance: BarWidget/Panel are never destroyed --
+  // `svc` is a live reactive read of shell.serviceFor(id), so this proves
+  // that degrading to null and back to a fresh instance never throws.
   property bool _lcSvcWasNonNull: false
   property bool _lcHeroWasLoadingWhileNull: false
 

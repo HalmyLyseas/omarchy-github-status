@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# test/probe/run -- mock-gh service probe suite: runs test/probe/service-probe.qml
-# under `qs -n -p` with test/mocks/gh standing in for the real `gh`, driving
-# the real Service.qml through its full status ladder. Skips without `qs`.
-# Logs go to files (qs block-buffers pipes).
+# test/probe/run -- mock-gh service probe suite: runs service-probe.qml
+# under `qs -n -p`, driving the real Service.qml through its status ladder.
+# Skips without `qs`. Logs go to files (qs block-buffers pipes).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,7 +118,7 @@ else
   [[ "$(field "$json" reposLength)" == "7" ]] && ok "ok: repos.length===7" || not_ok "ok: repos.length===7 (got $(field "$json" reposLength))"
   [[ "$(field "$json" reviewRequestsLength)" == "0" ]] && ok "ok: reviewRequests.length===0" \
     || not_ok "ok: reviewRequests.length===0 (got $(field "$json" reviewRequestsLength))"
-  # C3: the fixture's totalCount/issueCount are set above each section's own
+  # The fixture's totalCount/issueCount are set above each section's own
   # cap/window (see test/fixtures/mega-graphql.json) -- these must survive
   # to the public API untouched, paired with the section they describe.
   [[ "$(field "$json" openPRsTotal)" == "37" ]] && ok "ok: openPRsTotal===37 (exceeds the 20-item window)" \
@@ -159,10 +158,8 @@ check_no_engine_errors "$log" "unauth"
 
 echo
 echo "== no-gh (ghPath empty) -> recovery when the mock appears on PATH =="
-# `bash -lc` is a LOGIN shell -- it re-derives PATH from shell startup files
-# regardless of the inherited PATH, so a real mise-activated ~/.bashrc would
-# still find the real gh shim. An empty HOME with no rc files is what
-# actually makes `command -v gh` see nothing (verified live on this box).
+# `bash -lc` is a LOGIN shell -- it re-derives PATH from startup files, so
+# only an empty HOME with no rc files makes `command -v gh` see nothing.
 linkdir="$OUT_DIR/no-gh-link"
 emptyhome="$OUT_DIR/no-gh-home"
 mkdir -p "$linkdir" "$emptyhome"
