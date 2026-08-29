@@ -78,6 +78,7 @@ ShellRoot {
   function _armService(item) {
     if (probeRoot.ghPathOverride) item.ghPath = probeRoot.ghPathOverride
     item.ghPathTimeoutMs = 1500
+    item.ghVersionTimeoutMs = 1500
     item.probeTimeoutMs = 1500
     item.dashboardTimeoutMs = 1500
     item.notificationsTimeoutMs = 1500
@@ -237,7 +238,9 @@ ShellRoot {
       status: svc.status,
       statusHint: p.statusHint,
       statusHintSevere: p.statusHintSevere,
-      heroMeta: p.heroMeta
+      heroMeta: p.heroMeta,
+      ghVersion: svc.ghVersion,
+      ghVersionSupported: svc.ghVersionSupported
     })
   }
 

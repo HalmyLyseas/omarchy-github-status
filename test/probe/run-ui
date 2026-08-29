@@ -234,6 +234,30 @@ check_no_orphans "$mocklog" "degraded-no-gh"
 check_exit_status "degraded-no-gh"
 
 echo
+echo "== (2c) gh-unsupported: non-severe \"untested\" hint, auth/sync unaffected =="
+log="$(run_scenario gh-unsupported degraded GH_MOCK_MODE=gh-unsupported GHS_GHPATH="$MOCK_GH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/gh-unsupported.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "gh-unsupported: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "gh-unsupported: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "gh-unsupported: status=ok (auth/sync unaffected)" \
+    || not_ok "gh-unsupported: status=ok (got: $(field "$json" status))"
+  [[ "$(field "$json" ghVersion)" == "3.0.0" ]] && ok "gh-unsupported: svc.ghVersion=3.0.0" \
+    || not_ok "gh-unsupported: svc.ghVersion=3.0.0 (got: $(field "$json" ghVersion))"
+  [[ "$(field "$json" ghVersionSupported)" == "false" ]] && ok "gh-unsupported: svc.ghVersionSupported=false" \
+    || not_ok "gh-unsupported: svc.ghVersionSupported=false (got: $(field "$json" ghVersionSupported))"
+  [[ "$(field "$json" statusHintSevere)" == "false" ]] && ok "gh-unsupported: statusHintSevere=false (not severe)" \
+    || not_ok "gh-unsupported: statusHintSevere=false (got: $(field "$json" statusHintSevere))"
+  [[ "$(field "$json" statusHint)" == *"GitHub CLI 3.0.0 is untested"* ]] && ok "gh-unsupported: statusHint mentions the untested version" \
+    || not_ok "gh-unsupported: statusHint mentions the untested version (got: $(field "$json" statusHint))"
+fi
+check_no_engine_errors "$log" "gh-unsupported"
+check_no_orphans "$mocklog" "gh-unsupported"
+check_exit_status "gh-unsupported"
+
+echo
 echo "== (3) partial (C2 surface): hero meta gains \"· partial\", status hint gains its own line =="
 log="$(run_scenario partial partial GH_MOCK_MODE=partial GHS_GHPATH="$MOCK_GH")"
 json="$(json_line "$log")"

@@ -28,6 +28,7 @@ ShellRoot {
       probeRoot.service = item
       if (probeRoot.ghPathOverride) item.ghPath = probeRoot.ghPathOverride
       item.ghPathTimeoutMs = 1500
+      item.ghVersionTimeoutMs = 1500
       item.probeTimeoutMs = 1500
       item.dashboardTimeoutMs = 1500
       item.notificationsTimeoutMs = 1500
@@ -205,6 +206,8 @@ ShellRoot {
       rateLimitedUntil: service.rateLimitedUntil,
       dashboardPartial: service.dashboardPartial,
       ghPath: service.ghPath,
+      ghVersion: service.ghVersion,
+      ghVersionSupported: service.ghVersionSupported,
       dashboardStatus: debugProp("_dashboardStatus"),
       notifStatus: debugProp("_notifStatus"),
       note: note,

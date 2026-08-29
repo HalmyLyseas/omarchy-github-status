@@ -399,7 +399,7 @@ Item {
   }
 
   function resolveGhPath() {
-    if (root.ghPath) { startProbe(); return }
+    if (root.ghPath) { startProbe(); triggerGhVersionCheck(); return }
     forceResolveGhPath()
   }
 

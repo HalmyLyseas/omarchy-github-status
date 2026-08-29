@@ -130,6 +130,10 @@ else
   [[ "$(field "$json" reviewRequestsTotal)" == "14" ]] && ok "ok: reviewRequestsTotal===14 (exceeds the 10-item window)" \
     || not_ok "ok: reviewRequestsTotal===14 (got $(field "$json" reviewRequestsTotal))"
   [[ "$(field "$json" note)" == "" ]] && ok "ok: no harness-level note/timeout" || not_ok "ok: no harness-level note/timeout (got: $(field "$json" note))"
+  [[ "$(field "$json" ghVersion)" == "2.98.0" ]] && ok "ok: ghVersion parsed from gh --version (2.98.0)" \
+    || not_ok "ok: ghVersion parsed from gh --version (got: $(field "$json" ghVersion))"
+  [[ "$(field "$json" ghVersionSupported)" == "true" ]] && ok "ok: ghVersionSupported=true (pinned major)" \
+    || not_ok "ok: ghVersionSupported=true (got: $(field "$json" ghVersionSupported))"
   etag_sent="$(grep -c 'If-None-Match: "mock-etag-v1"' "$mocklog" 2>/dev/null)"
   [[ "${etag_sent:-0}" -ge 1 ]] && ok "ok: ETag captured and sent on the second notifications poll" \
     || not_ok "ok: ETag captured and sent on the second notifications poll (mock log had no If-None-Match)"
@@ -321,6 +325,26 @@ fi
 check_no_orphans "$mocklog" "notif-garbage"
 check_exit_status "notif-garbage"
 check_no_engine_errors "$log" "notif-garbage"
+
+echo
+echo "== gh-unsupported: gh --version above the pinned majors -> ghVersionSupported=false, status unaffected =="
+log="$(run_scenario gh-unsupported GH_MOCK_MODE=gh-unsupported GHS_GHPATH="$MOCK_PATH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/gh-unsupported.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "gh-unsupported: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "gh-unsupported: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" ghVersion)" == "3.0.0" ]] && ok "gh-unsupported: ghVersion parsed as 3.0.0" \
+    || not_ok "gh-unsupported: ghVersion parsed as 3.0.0 (got: $(field "$json" ghVersion))"
+  [[ "$(field "$json" ghVersionSupported)" == "false" ]] && ok "gh-unsupported: ghVersionSupported=false" \
+    || not_ok "gh-unsupported: ghVersionSupported=false (got: $(field "$json" ghVersionSupported))"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "gh-unsupported: status unaffected (auth/dashboard/notifications still ok)" \
+    || not_ok "gh-unsupported: status unaffected (got: $(field "$json" status))"
+fi
+check_no_orphans "$mocklog" "gh-unsupported"
+check_exit_status "gh-unsupported"
+check_no_engine_errors "$log" "gh-unsupported"
 
 echo
 echo "-- stale ordering (two pollers write disjoint data) -- not applicable, no scenario invented --"

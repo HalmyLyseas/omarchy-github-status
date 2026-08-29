@@ -25,6 +25,16 @@ fi
 
 [[ "$MODE" == "hang" ]] && exec sleep 600
 
+# --- gh --version -----------------------------------------------------------
+if [[ "${1:-}" == "--version" ]]; then
+  if [[ "$MODE" == "gh-unsupported" ]]; then
+    echo "gh version 3.0.0 (2026-08-20)"
+  else
+    echo "gh version 2.98.0 (2026-08-20)"
+  fi
+  exit 0
+fi
+
 # --- gh api user --jq .login (probe) ----------------------------------------
 if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
   case "$MODE" in
