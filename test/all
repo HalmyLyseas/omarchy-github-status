@@ -21,6 +21,11 @@ node --test "$SCRIPT_DIR/comment-hygiene.test.js"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo
+echo "== cli-contract.mjs (read-only; skips cleanly without a real authenticated gh) =="
+node "$SCRIPT_DIR/cli-contract.mjs"
+if [[ $? -ne 0 ]]; then overall=1; fi
+
+echo
 echo "== test/probe/run (mock-gh service probe suite) =="
 bash "$SCRIPT_DIR/probe/run"
 if [[ $? -ne 0 ]]; then overall=1; fi
