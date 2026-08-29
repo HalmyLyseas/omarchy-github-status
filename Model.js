@@ -514,8 +514,16 @@ function filterIssues(issues, mode) {
 // from an ordinary dashboard response's own viewer.login field when the
 // auth probe itself never got the chance to (its first attempt failed
 // non-auth, or timed out into the watchdog) -- see handleDashboardExit.
+// C3: each section's real GraphQL total (`totalCount` on the object-graph
+// connections, `issueCount` on the `search` connection used for
+// reviewRequests) rides alongside its mapped array, `null` exactly when
+// that section itself is `null` -- same per-section replace contract, so
+// Service.qml only ever applies a total together with the list it counts.
 function mapDashboard(json) {
-  var result = { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
+  var result = {
+    openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "",
+    openPRsTotal: null, reviewRequestsTotal: null, reposTotal: null, myIssuesTotal: null
+  }
   if (!isObject(json)) return result
   var data = isObject(json.data) ? json.data : null
   if (!data) return result
@@ -525,15 +533,19 @@ function mapDashboard(json) {
   result.login = login
   if (viewer && isObject(viewer.openPRs)) {
     result.openPRs = mapOpenPRs(login, viewer.openPRs.nodes)
+    result.openPRsTotal = safeNum(viewer.openPRs.totalCount, 0)
   }
   if (viewer && isObject(viewer.repositories)) {
     result.repos = mapRepos(login, viewer.repositories.nodes)
+    result.reposTotal = safeNum(viewer.repositories.totalCount, 0)
   }
   if (viewer && isObject(viewer.myIssues)) {
     result.myIssues = mapMyIssues(login, viewer.myIssues.nodes)
+    result.myIssuesTotal = safeNum(viewer.myIssues.totalCount, 0)
   }
   if (isObject(data.reviewRequests)) {
     result.reviewRequests = mapReviewRequests(login, data.reviewRequests.nodes)
+    result.reviewRequestsTotal = safeNum(data.reviewRequests.issueCount, 0)
   }
   return result
 }
@@ -677,6 +689,7 @@ var DASHBOARD_QUERY = [
   "    }",
   "  }",
   "  reviewRequests: search(query: \"is:open is:pr review-requested:@me\", type: ISSUE, first: 10) {",
+  "    issueCount",
   "    nodes {",
   "      ... on PullRequest {",
   "        title url number updatedAt",

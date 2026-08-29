@@ -386,6 +386,19 @@ test("mapDashboard: real mega-graphql fixture maps openPRs/reviewRequests/repos/
   // (handleDashboardExit) reads this.
   assert.strictEqual(mapped.login, raw.data.viewer.login)
   assert.ok(mapped.login, "expected a non-empty login in the real fixture")
+
+  // C3: totalCount/issueCount ride alongside each section, read straight
+  // off the fixture's own GraphQL metadata (bumped deliberately above the
+  // section's own cap/window so "N of T" has real coverage -- see the
+  // fixture's own totalCount/issueCount values).
+  assert.strictEqual(mapped.openPRsTotal, raw.data.viewer.openPRs.totalCount)
+  assert.strictEqual(mapped.myIssuesTotal, raw.data.viewer.myIssues.totalCount)
+  assert.strictEqual(mapped.reposTotal, raw.data.viewer.repositories.totalCount)
+  assert.strictEqual(mapped.reviewRequestsTotal, raw.data.reviewRequests.issueCount)
+  assert.ok(mapped.openPRsTotal > mapped.openPRs.length, "openPRsTotal exceeds the rendered/capped count")
+  assert.ok(mapped.myIssuesTotal > mapped.myIssues.length, "myIssuesTotal exceeds the rendered/capped count")
+  assert.ok(mapped.reposTotal > mapped.repos.length, "reposTotal exceeds the rendered/capped count")
+  assert.ok(mapped.reviewRequestsTotal > mapped.reviewRequests.length, "reviewRequestsTotal exceeds the rendered count")
 })
 
 test("mapDashboard: login field -- present when viewer.login is set, empty string when missing/malformed, never null", function () {
@@ -428,7 +441,10 @@ test("mapDashboard: non-object / malformed input returns all-null per-section sh
   // []) when it did not resolve at all -- that's the explicit "don't
   // replace" signal the Service layer relies on. An envelope with no
   // usable `data` at all (these cases) means all three sections are null.
-  var allNull = { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
+  var allNull = {
+    openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "",
+    openPRsTotal: null, reviewRequestsTotal: null, reposTotal: null, myIssuesTotal: null
+  }
   assert.deepStrictEqual(Model.mapDashboard(null), allNull)
   assert.deepStrictEqual(Model.mapDashboard(undefined), allNull)
   assert.deepStrictEqual(Model.mapDashboard("not json"), allNull)
@@ -449,8 +465,8 @@ test("mapDashboard: partial envelope (data present for some sections, errors for
     data: {
       viewer: {
         login: "me",
-        openPRs: { nodes: [{ title: "Fix bug", url: "https://github.com/o/r/pull/1", number: 1, updatedAt: "2026-01-01T00:00:00Z", repository: { nameWithOwner: "o/r" } }] },
-        repositories: { nodes: [{ name: "r" }] }
+        openPRs: { totalCount: 9, nodes: [{ title: "Fix bug", url: "https://github.com/o/r/pull/1", number: 1, updatedAt: "2026-01-01T00:00:00Z", repository: { nameWithOwner: "o/r" } }] },
+        repositories: { totalCount: 3, nodes: [{ name: "r" }] }
       },
       reviewRequests: null
     },
@@ -462,6 +478,11 @@ test("mapDashboard: partial envelope (data present for some sections, errors for
   assert.strictEqual(mapped.repos.length, 1)
   assert.strictEqual(mapped.reviewRequests, null, "the errored section must be null, not []," +
     " so the Service layer knows not to replace last-good reviewRequests")
+  // C3: a parsed section's total rides along with it; the errored
+  // section's total is null exactly like the section itself.
+  assert.strictEqual(mapped.openPRsTotal, 9)
+  assert.strictEqual(mapped.reposTotal, 3)
+  assert.strictEqual(mapped.reviewRequestsTotal, null)
 })
 
 test("mapDashboard: fully-successful envelope with a coexisting (unrelated/empty) errors array still maps every section", function () {
@@ -472,7 +493,10 @@ test("mapDashboard: fully-successful envelope with a coexisting (unrelated/empty
     },
     errors: []
   })
-  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [], login: "me" })
+  assert.deepStrictEqual(mapped, {
+    openPRs: [], reviewRequests: [], repos: [], myIssues: [], login: "me",
+    openPRsTotal: 0, reviewRequestsTotal: 0, reposTotal: 0, myIssuesTotal: 0
+  })
 })
 
 test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewRequests 20, repos 30, myIssues 20)", function () {
@@ -506,7 +530,10 @@ test("mapDashboard: tolerates non-array `nodes` fields", function () {
       reviewRequests: { nodes: 42 }
     }
   })
-  assert.deepStrictEqual(mapped, { openPRs: [], reviewRequests: [], repos: [], myIssues: [], login: "" })
+  assert.deepStrictEqual(mapped, {
+    openPRs: [], reviewRequests: [], repos: [], myIssues: [], login: "",
+    openPRsTotal: 0, reviewRequestsTotal: 0, reposTotal: 0, myIssuesTotal: 0
+  })
 })
 
 test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-review.md F2)", function () {
@@ -1120,6 +1147,7 @@ test("DASHBOARD_QUERY: pinned exact literal (G2 native rework -- was scripts/fet
     "    }",
     "  }",
     "  reviewRequests: search(query: \"is:open is:pr review-requested:@me\", type: ISSUE, first: 10) {",
+    "    issueCount",
     "    nodes {",
     "      ... on PullRequest {",
     "        title url number updatedAt",
@@ -1133,6 +1161,9 @@ test("DASHBOARD_QUERY: pinned exact literal (G2 native rework -- was scripts/fet
   assert.strictEqual(Model.DASHBOARD_QUERY, expected)
   assert.ok(Model.DASHBOARD_QUERY.indexOf("mutation") === -1, "never a mutation")
   assert.ok(Model.DASHBOARD_QUERY.indexOf("repositories(first: 30") >= 0, "repositories window pinned at 30")
+  // C3: reviewRequestsTotal is read off this field -- pin its presence the
+  // same way the other three sections' totalCount is already pinned above.
+  assert.ok(Model.DASHBOARD_QUERY.indexOf("    issueCount") >= 0, "reviewRequests search carries issueCount")
 })
 
 // -------------------------------------------------------------------- sanitizeEtag (B1)
