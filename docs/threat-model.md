@@ -69,3 +69,13 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
   authenticated on the machine.
 - Physical or local access, kernel-level attacks, or anything not reachable
   through this plugin's own `gh`-argv, settings, or URL-open surface.
+
+## CI as part of this boundary
+
+`.github/**` is exempt from the repo's own comment-hygiene scan
+(`test/comment-hygiene.test.js`) and, by extension, from `CLAUDE.md` rule
+4's package-manager-literal restriction: workflow files are CI-only
+infrastructure, never installed on or executed by an end user's machine,
+and legitimately need `pacman`-shaped commands to build a disposable test
+container. `README.md` and `docs/developers.md` remain prose-only `.md`
+files with no command literals of their own.

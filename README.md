@@ -168,11 +168,15 @@ omarchy plugin validate .
 ```
 
 `test/all` runs the Node unit tests (`Model.js`, a QML `Text` PlainText-sink
-audit, the comment-hygiene scan), then two `qs -n -p` probe suites: one
-drives the real `Service.qml` through its full status ladder against a
-mock `gh`, the other drives the real `BarWidget.qml`/`Panel.qml` against a
-stub shell/bar. See [`docs/developers.md`](docs/developers.md) "Testing"
-for what each suite proves.
+audit, the comment-hygiene scan), a read-only contract test against your
+real installed `gh` CLI (skips cleanly if `gh` is missing or not signed
+in), then two `qs -n -p` probe suites: one drives the real `Service.qml`
+through its full status ladder against a mock `gh`, the other drives the
+real `BarWidget.qml`/`Panel.qml` against a stub shell/bar. A GitHub Actions
+workflow (`.github/workflows/test.yml`) runs the same checks headlessly on
+every push/PR; `test/ci-local [--no-cage]` mirrors it on a dev box. See
+[`docs/developers.md`](docs/developers.md) "Testing"/"CI" for what each
+suite proves.
 
 ## License
 

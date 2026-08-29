@@ -46,11 +46,12 @@ plugin); every fetch after that spawns `gh` itself as a fixed argv array
 plus at most a sanitised ETag as a separate element — never interpolated
 into a shell string.
 
-Four `Process` objects, one contract each (`Service.qml`):
+Five `Process` objects, one contract each (`Service.qml`):
 
 | Process | Command | Deadline | Caps |
 |---|---|---|---|
 | `ghPathProc` | `["bash","-lc","command -v gh"]` | `ghPathTimeoutMs` (5s) | shared line/char caps |
+| `ghVersionProc` | `[gh, "--version"]` | `ghVersionTimeoutMs` (5s) | shared line/char caps |
 | `probeProc` | `[gh, "api", "user", "--jq", ".login"]` | `probeTimeoutMs` (30s) | shared line/char caps |
 | `dashboardProc` | `[gh, "api", "graphql", "-f", "query="+Model.DASHBOARD_QUERY]` | `dashboardTimeoutMs` (30s) | `dashboardOutputCharsCap` (2MB, one JSON line) |
 | `notificationsProc` | `[gh, "api", "-i", "notifications"[, "-H", "If-None-Match: <etag>"]]` | `notificationsTimeoutMs` (30s) | shared line/char caps |
@@ -113,6 +114,18 @@ ETag is refreshed if a new one appears, `lastSyncMs` bumps, but
 fires) — the conditional-request contract that makes an unchanged inbox
 cost near-nothing.
 
+## CLI version pin
+
+`Model.SUPPORTED_GH_MAJORS` lists the gh CLI major versions this plugin
+has actually been tested against, matched on the leading major segment
+only (`2.98.0` and `2.0.0` both count as pinned). `ghVersionProc` reads
+`gh --version` once per gh path resolution into `Service.ghVersion`/
+`ghVersionSupported` (`""`/`null` until known). An unsupported result adds
+a dim, non-severe line to `Panel.qml`'s status hint — never blocks the
+pollers or changes `status`, since this is a display concern, not an
+auth/connectivity one. `test/cli-contract.mjs` fails loudly if the real
+installed CLI ever drifts to an unpinned major.
+
 ## Security invariants
 
 - **Read-only GitHub, always.** Only `gh api` GET and `gh api graphql`
@@ -173,26 +186,47 @@ ready to ship.
 - `test/qml-sinks.test.js` (Node) — scans every `.qml` file at the plugin
   root for a `Text{}` sink missing `textFormat: Text.PlainText`.
 - `test/comment-hygiene.test.js` (Node) — scans every shipped file
-  (`git ls-files`) for a comment run longer than 3 lines or a forbidden
-  project-log token; kept clean by the same rule this file's own prose follows.
+  (`git ls-files`, `.github/**` exempt) for a comment run longer than 3
+  lines or a forbidden project-log token; kept clean by the same rule
+  this file's own prose follows.
+- `test/cli-contract.mjs` (Node, read-only) — runs the real local `gh`:
+  `--version`'s major must be in `Model.SUPPORTED_GH_MAJORS` (never
+  skipped, even without auth); `gh auth status` and `gh api user --jq
+  .login` only run when actually signed in. Skips cleanly (exit 0 +
+  `SKIP:`) when `gh` is absent or unauthenticated — CI has the CLI but no
+  credentials.
 - `test/probe/run` — a `qs -n -p` instance loading the real `Service.qml`
   against `test/mocks/gh` (a PATH/absolute-path-shadowed mock driven
   entirely by argv), driving the full status ladder: ok, unauthenticated
   recovery, no-gh recovery, mid-session binary removal/recovery, offline,
   rate-limited (with a real reset-header round-trip), a hung `gh` (watchdog
   fires), a flooding `gh` (output cap fires), a partial GraphQL envelope,
-  and a malformed notifications 200 body. Asserts no orphaned mock process,
-  qs exit 0, and no engine errors in the log.
+  a malformed notifications 200 body, and an unpinned `gh --version` major
+  (`ghVersionSupported=false`, status unaffected). Asserts no orphaned mock
+  process, qs exit 0, and no engine errors in the log.
 - `test/probe/run-ui` — a second `qs -n -p` instance loading the real
   `BarWidget.qml` (which eagerly loads `Panel.qml`) against a stub
   `bar`/`shell`, plus the real `Service.qml` against the same mock `gh`.
   Covers rendered section counts vs. the fixture, `"N of T"` pills, the
-  degraded ladder, the partial-dashboard surface, live search narrowing,
-  fold/unfold against the actual rendered tree, the `svc` null→new-instance
-  lifecycle (zero TypeErrors), and the `openUrl` allowlist (a non-github URL
-  never reaches the PATH-shadowed `xdg-open` mock).
+  degraded ladder (including the non-severe "untested gh version" hint),
+  the partial-dashboard surface, live search narrowing, fold/unfold against
+  the actual rendered tree, the `svc` null→new-instance lifecycle (zero
+  TypeErrors), and the `openUrl` allowlist (a non-github URL never reaches
+  the PATH-shadowed `xdg-open` mock).
 - `omarchy plugin validate .` and qmllint on every `.qml` file must show 0
   errors before a commit that touches QML.
+
+## CI
+
+`.github/workflows/test.yml` runs qmllint (0 errors, at least 5 `.qml`
+files) and `omarchy-plugin-validate` first, then the Node unit tests and
+`test/cli-contract.mjs`, on `archlinux:latest`, then both probe suites
+under `cage` with a headless wlroots backend. The `omarchy` package is
+never installed there — only its `usr/share/omarchy/shell` and
+`usr/share/omarchy/bin` subtrees are extracted from the downloaded package
+(`-Swdd`, skipping dependency resolution so the extraction glob matches
+exactly one archive). `test/ci-local [--no-cage]` mirrors the same steps
+on a dev box.
 
 ## Releasing
 
@@ -206,7 +240,10 @@ publish a newer upstream commit") naming the plugin ID
 SHA of the pushed `master` `HEAD`. Do not push to `master` mid-review of a
 pending submission or verification issue — approval is bound to the exact
 commit that was validated. Editing an open issue (never opening a second
-one) re-runs the bot's checks.
+one) re-runs the bot's checks. The GitHub Actions workflow only starts
+running once `master` is actually pushed (a `push`/`pull_request` trigger
+needs a public remote) — `test/ci-local` is the pre-push proof; check the
+Actions tab is green shortly after the first push.
 
 ## Credits
 
