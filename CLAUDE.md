@@ -36,17 +36,21 @@ is never performed by an agent.**
 2. **Read-only GitHub.** Only `gh api` GET and `gh api graphql` queries —
    never a mutation, never `-X POST/PATCH/PUT/DELETE`, never any gh
    subcommand that changes remote state.
-3. **Security invariants of `exchange/06-design.md` are non-negotiable**:
+3. **`gh` is a direct Quickshell `Process` child, never a shell wrapper.**
+   Its path is resolved once via `bash -lc "command -v gh"` (the only shell
+   invocation anywhere); every fetch after that is a fixed argv array plus
+   at most a sanitised ETag as its own element.
+4. **Security invariants of `exchange/06-design.md` are non-negotiable**:
    no disk cache / no FileView; `Text.PlainText` on all remote strings;
    URL opens allowlisted to `https://github.com/` and spawned as an
    argument array (no shell); no package-manager command strings in any
    shipped doc; no service-manager invocations or unit files; fixed
    command strings only — remote data is never interpolated into a shell
    string.
-4. **Never modify anything under `/usr/share/omarchy/`** (reading is
+5. **Never modify anything under `/usr/share/omarchy/`** (reading is
    encouraged). Never `omarchy plugin clone` a first-party plugin. Never
    run `omarchy refresh` / `omarchy reinstall`.
-5. Working repo is `~/git/omarchy-github-status-plugin/plugin/`; live
+6. Working repo is `~/git/omarchy-github-status-plugin/plugin/`; live
    testing goes through the rsync install step in `06-design.md` ("Dev
    workflow") to spare the user's bar from per-save reload flashes. At
    release the installed folder becomes the canonical clone.

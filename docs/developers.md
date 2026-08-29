@@ -1,5 +1,12 @@
 # Developer notes
 
+**G2 native rework note:** `scripts/fetch-dashboard`/`fetch-notifications`/
+`probe-auth` are gone — `gh` is now a direct Quickshell `Process` child of
+`Service.qml` (path resolved once via `bash -lc "command -v gh"`, the only
+shell invocation left). The three script rows below and the process-contract
+sections that describe them predate that change; treat `Service.qml` itself
+as the source of truth until this file gets its full rewrite.
+
 The distilled why and how of this plugin, for a contributor (or a future
 maintenance session) starting from a bare clone. The README covers using it;
 `CLAUDE.md` carries the project rules and hard constraints. Everything here
