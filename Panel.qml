@@ -132,6 +132,12 @@ Panel {
   readonly property var shell: bar && bar.shell ? bar.shell : null
   readonly property var svc: shell ? shell.serviceFor("halmylyseas.github-status") : null
 
+  // UI-probe-only: the rendered content Column's own `id` is visible
+  // throughout this whole file regardless of the KeyboardPanel/PanelWindow
+  // boundary in between, so this is a plain forward reference, not a tree
+  // walk -- see test/probe/ui-probe.qml.
+  readonly property var _debugContentItem: column
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color muted: Color.muted

@@ -1,0 +1,351 @@
+#!/usr/bin/env bash
+# test/probe/run-ui -- UI probe suite: runs test/probe/ui-probe.qml under
+# `qs -n -p`, PATH shadowed like test/probe/run, plus QML_IMPORT_PATH at a
+# scratch `qs` symlink so `import qs.Commons`/`import qs.Ui` resolve. Skips
+# without `qs`.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MOCKS="$PLUGIN_DIR/test/mocks"
+MOCK_GH="$MOCKS/gh"
+OUT_DIR="$(mktemp -d)"
+trap 'rm -rf "$OUT_DIR"' EXIT
+
+fail_count=0
+pass_count=0
+ok() { pass_count=$((pass_count + 1)); echo "ok - $1"; }
+not_ok() { fail_count=$((fail_count + 1)); echo "NOT OK - $1"; }
+
+if ! command -v qs >/dev/null 2>&1; then
+  echo "test/probe/run-ui: no \`qs\` on PATH (no Wayland session?) -- skipping UI probe suite"
+  exit 0
+fi
+
+QMLROOT="$OUT_DIR/qmlroot"
+mkdir -p "$QMLROOT"
+ln -sfn /usr/share/omarchy/shell "$QMLROOT/qs"
+
+# run_scenario <label> <VAR=val>... -- runs the probe once with every
+# trailing VAR=val exported, GHS_UI_SCENARIO=<label's scenario name minus
+# any -suffix>, GHS_XDGOPEN_LOG always set (harmless for scenarios that
+# never call xdg-open).
+run_scenario() {
+  local label="$1" ui_scenario="$2"; shift 2
+  local log="$OUT_DIR/$label.log"
+  local mocklog="$OUT_DIR/$label.mock.log"
+  local xdgopenlog="$OUT_DIR/$label.xdgopen.log"
+  : > "$mocklog"
+  : > "$xdgopenlog"
+  env GH_MOCK_LOG="$mocklog" \
+    GHS_PLUGIN_DIR="$PLUGIN_DIR" \
+    GHS_UI_SCENARIO="$ui_scenario" \
+    GHS_XDGOPEN_LOG="$xdgopenlog" \
+    QML_IMPORT_PATH="$QMLROOT" \
+    PATH="$MOCKS:$PATH" \
+    "$@" \
+    timeout 30 qs -n -p "$PLUGIN_DIR/test/probe/ui-probe.qml" > "$log" 2>&1
+  echo "$?" > "$OUT_DIR/$label.exit"
+  echo "$log"
+}
+
+# check_exit_status <label> -- qs's own exit status; a scenario that
+# crashed/timed out after printing a valid PROBE_RESULT line must still
+# fail, not just whatever field assertions happened to run first.
+check_exit_status() {
+  local label="$1" code
+  code="$(cat "$OUT_DIR/$label.exit" 2>/dev/null || echo "")"
+  [[ "$code" == "0" ]] && ok "$label: qs exited 0 (not a crash/timeout, got $code)" \
+    || not_ok "$label: qs exited 0 (not a crash/timeout, got exit code: ${code:-unknown})"
+}
+
+json_line() { grep -o 'PROBE_RESULT .*' "$1" | tail -n1 | sed 's/^PROBE_RESULT //'; }
+
+field() {
+  # field <json> <key> -- deterministic single flat object, node available
+  # everywhere this repo's tests already require node.
+  node -e '
+    try {
+      const data = JSON.parse(process.argv[1]);
+      const v = data[process.argv[2]];
+      process.stdout.write(v === undefined || v === null ? "" : String(v));
+    } catch (e) { process.stdout.write(""); }
+  ' "$1" "$2"
+}
+
+# Same orphan-kill convention as test/probe/run: any mock PID this run's
+# log recorded that is still alive after `qs` exited is a leaked process. A
+# dead-but-unreaped mock lingers as zombie "Z" where no init reaps it
+# (containers) and kill -0 still succeeds on it -- state is what counts.
+alive() {
+  local pid="$1" state
+  state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)" || return 1
+  [[ -n "$state" && "$state" != "Z" && "$state" != "X" ]]
+}
+settled_alive() {
+  local pid="$1" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    alive "$pid" || return 1
+    sleep 0.2
+  done
+  return 0
+}
+
+check_no_orphans() {
+  local mocklog="$1" label="$2"
+  local pids leaked=0
+  pids="$(grep -oP '^PID=\K[0-9]+' "$mocklog" 2>/dev/null | sort -u)"
+  for pid in $pids; do
+    if settled_alive "$pid"; then
+      leaked=1
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 0.2
+      alive "$pid" && kill -9 "$pid" 2>/dev/null || true
+      echo "  orphan: PID $pid was still alive after qs exited (killed by test/probe/run-ui)"
+    fi
+  done
+  if [[ $leaked -eq 1 ]]; then
+    not_ok "$label: no orphaned mock process left behind"
+  else
+    ok "$label: no orphaned mock process left behind"
+  fi
+}
+
+# check_no_engine_errors <log> <label> -- a missing stub property/method
+# throws a TypeError/ReferenceError; a QML load failure prints "ERROR:"
+# lines. Match the colon: driver noise like VK_ERROR_… must not count.
+check_no_engine_errors() {
+  local log="$1" label="$2"
+  local count
+  count="$(grep -c 'TypeError\|ReferenceError\|ERROR:' "$log" 2>/dev/null)"
+  if [[ "${count:-0}" -eq 0 ]]; then
+    ok "$label: 0 TypeError/ReferenceError/QML load ERROR in the log"
+  else
+    not_ok "$label: 0 TypeError/ReferenceError/QML load ERROR in the log (got $count)"
+    grep 'TypeError\|ReferenceError\|ERROR:' "$log" | head -5 | sed 's/^/    /'
+  fi
+}
+
+echo "== (1) ok: sections render, C3 pills read \"N of T\", bar-derived state =="
+log="$(run_scenario ok ok GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/ok.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "ok: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "ok: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "ok: status=ok" || not_ok "ok: status=ok (got: $(field "$json" status))"
+  [[ "$(field "$json" prLength)" == "1" ]] && ok "ok: filteredOpenPRs.length===1" \
+    || not_ok "ok: filteredOpenPRs.length===1 (got $(field "$json" prLength))"
+  [[ "$(field "$json" issuesLength)" == "4" ]] && ok "ok: filteredMyIssues.length===4 (focus filter)" \
+    || not_ok "ok: filteredMyIssues.length===4 (got $(field "$json" issuesLength))"
+  [[ "$(field "$json" reposLength)" == "7" ]] && ok "ok: filteredRepos.length===7" \
+    || not_ok "ok: filteredRepos.length===7 (got $(field "$json" reposLength))"
+  [[ "$(field "$json" reviewLength)" == "0" ]] && ok "ok: filteredReviewRequests.length===0" \
+    || not_ok "ok: filteredReviewRequests.length===0 (got $(field "$json" reviewLength))"
+  [[ "$(field "$json" inboxLength)" == "0" ]] && ok "ok: filteredNotifications.length===0" \
+    || not_ok "ok: filteredNotifications.length===0 (got $(field "$json" inboxLength))"
+  # Repeater.count read off the ACTUAL rendered tree, matching the same
+  # fixture-derived lengths above -- proves the data model and the
+  # instantiated UI agree, not just Panel's own JS properties.
+  [[ "$(field "$json" prRepeaterCount)" == "1" ]] && ok "ok: PR section Repeater.count===1" \
+    || not_ok "ok: PR section Repeater.count===1 (got $(field "$json" prRepeaterCount))"
+  [[ "$(field "$json" issuesRepeaterCount)" == "4" ]] && ok "ok: Issues section Repeater.count===4" \
+    || not_ok "ok: Issues section Repeater.count===4 (got $(field "$json" issuesRepeaterCount))"
+  [[ "$(field "$json" reposRepeaterCount)" == "7" ]] && ok "ok: Repositories section Repeater.count===7" \
+    || not_ok "ok: Repositories section Repeater.count===7 (got $(field "$json" reposRepeaterCount))"
+  [[ "$(field "$json" reviewRepeaterCount)" == "0" ]] && ok "ok: Review requests section Repeater.count===0" \
+    || not_ok "ok: Review requests section Repeater.count===0 (got $(field "$json" reviewRepeaterCount))"
+  [[ "$(field "$json" inboxRepeaterCount)" == "0" ]] && ok "ok: Inbox section Repeater.count===0" \
+    || not_ok "ok: Inbox section Repeater.count===0 (got $(field "$json" inboxRepeaterCount))"
+  # C3: the fixture's totalCount/issueCount exceed each section's own
+  # cap/window (test/fixtures/mega-graphql.json) -- the rendered pill must
+  # read "N of T", not just N.
+  [[ "$(field "$json" prPill)" == "1 of 37" ]] && ok "ok: PR pill reads \"1 of 37\"" \
+    || not_ok "ok: PR pill reads \"1 of 37\" (got: $(field "$json" prPill))"
+  [[ "$(field "$json" issuesPill)" == "4 of 24" ]] && ok "ok: Issues pill reads \"4 of 24\"" \
+    || not_ok "ok: Issues pill reads \"4 of 24\" (got: $(field "$json" issuesPill))"
+  [[ "$(field "$json" reposPill)" == "7 of 45" ]] && ok "ok: Repositories pill reads \"7 of 45\"" \
+    || not_ok "ok: Repositories pill reads \"7 of 45\" (got: $(field "$json" reposPill))"
+  [[ "$(field "$json" reviewPill)" == "0 of 14" ]] && ok "ok: Review requests pill reads \"0 of 14\"" \
+    || not_ok "ok: Review requests pill reads \"0 of 14\" (got: $(field "$json" reviewPill))"
+  [[ "$(field "$json" unreadCount)" == "0" ]] && ok "ok: bar unreadCount===0 (fixture has no unread notifications)" \
+    || not_ok "ok: bar unreadCount===0 (got: $(field "$json" unreadCount))"
+  [[ "$(field "$json" hasAttention)" == "false" ]] && ok "ok: bar hasAttention===false (no failing CI, no review requests)" \
+    || not_ok "ok: bar hasAttention===false (got: $(field "$json" hasAttention))"
+  [[ "$(field "$json" tooltipSummary)" == "GitHub Status — 1 PR" ]] && ok "ok: bar tooltipSummary reads \"GitHub Status — 1 PR\"" \
+    || not_ok "ok: bar tooltipSummary reads \"GitHub Status — 1 PR\" (got: $(field "$json" tooltipSummary))"
+fi
+check_no_engine_errors "$log" "ok"
+check_no_orphans "$mocklog" "ok"
+check_exit_status "ok"
+
+echo
+echo "== (2) degraded ladder: unauthenticated / no-gh / offline / rate-limited =="
+for pair in "unauthenticated:unauthenticated" "offline:offline" "rate-limited:rate-limited"; do
+  label="degraded-${pair%%:*}"
+  mode="${pair##*:}"
+  log="$(run_scenario "$label" degraded GH_MOCK_MODE="$mode" GHS_GHPATH="$MOCK_GH")"
+  json="$(json_line "$log")"
+  mocklog="$OUT_DIR/$label.mock.log"
+  if [[ -z "$json" ]]; then
+    not_ok "$label: probe printed a PROBE_RESULT line"; cat "$log"
+  else
+    ok "$label: probe printed a PROBE_RESULT line"
+    [[ "$(field "$json" status)" == "$mode" ]] && ok "$label: status=$mode" \
+      || not_ok "$label: status=$mode (got: $(field "$json" status))"
+    [[ "$(field "$json" statusHint)" != "" ]] && ok "$label: statusHint is non-empty" \
+      || not_ok "$label: statusHint is non-empty"
+    [[ "$(field "$json" heroMeta)" == "Never synced" ]] && ok "$label: heroMeta=\"Never synced\" (no successful sync yet)" \
+      || not_ok "$label: heroMeta=\"Never synced\" (got: $(field "$json" heroMeta))"
+  fi
+  check_no_engine_errors "$log" "$label"
+  check_no_orphans "$mocklog" "$label"
+  check_exit_status "$label"
+done
+# statusHintSevere: only no-gh/unauthenticated are severe (urgent-colored);
+# offline/rate-limited are not, even though both also show a hint.
+json="$(json_line "$OUT_DIR/degraded-unauthenticated.log")"
+[[ "$(field "$json" statusHintSevere)" == "true" ]] && ok "degraded-unauthenticated: statusHintSevere=true" \
+  || not_ok "degraded-unauthenticated: statusHintSevere=true (got: $(field "$json" statusHintSevere))"
+json="$(json_line "$OUT_DIR/degraded-offline.log")"
+[[ "$(field "$json" statusHintSevere)" == "false" ]] && ok "degraded-offline: statusHintSevere=false" \
+  || not_ok "degraded-offline: statusHintSevere=false (got: $(field "$json" statusHintSevere))"
+json="$(json_line "$OUT_DIR/degraded-rate-limited.log")"
+[[ "$(field "$json" statusHintSevere)" == "false" ]] && ok "degraded-rate-limited: statusHintSevere=false" \
+  || not_ok "degraded-rate-limited: statusHintSevere=false (got: $(field "$json" statusHintSevere))"
+
+echo
+echo "== (2b) degraded ladder: no-gh (ghPath never resolves; HOME-isolated login shell) =="
+emptyhome="$OUT_DIR/no-gh-home"
+mkdir -p "$emptyhome"
+log="$(run_scenario degraded-no-gh degraded HOME="$emptyhome" PATH="/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/degraded-no-gh.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "degraded-no-gh: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "degraded-no-gh: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "no-gh" ]] && ok "degraded-no-gh: status=no-gh" \
+    || not_ok "degraded-no-gh: status=no-gh (got: $(field "$json" status))"
+  [[ "$(field "$json" statusHintSevere)" == "true" ]] && ok "degraded-no-gh: statusHintSevere=true" \
+    || not_ok "degraded-no-gh: statusHintSevere=true (got: $(field "$json" statusHintSevere))"
+  [[ "$(field "$json" statusHint)" == *"GitHub CLI (gh) not found"* ]] && ok "degraded-no-gh: statusHint mentions gh not found" \
+    || not_ok "degraded-no-gh: statusHint mentions gh not found (got: $(field "$json" statusHint))"
+fi
+check_no_engine_errors "$log" "degraded-no-gh"
+check_no_orphans "$mocklog" "degraded-no-gh"
+check_exit_status "degraded-no-gh"
+
+echo
+echo "== (3) partial (C2 surface): hero meta gains \"· partial\", status hint gains its own line =="
+log="$(run_scenario partial partial GH_MOCK_MODE=partial GHS_GHPATH="$MOCK_GH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/partial.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "partial: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "partial: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" dashboardPartial)" == "true" ]] && ok "partial: svc.dashboardPartial=true" \
+    || not_ok "partial: svc.dashboardPartial=true (got: $(field "$json" dashboardPartial))"
+  [[ "$(field "$json" heroMeta)" == *"· partial"* ]] && ok "partial: heroMeta contains \"· partial\"" \
+    || not_ok "partial: heroMeta contains \"· partial\" (got: $(field "$json" heroMeta))"
+  [[ "$(field "$json" statusHint)" == "Some sections failed to load — showing last-known data for them." ]] \
+    && ok "partial: statusHint reads the C2 surface message" \
+    || not_ok "partial: statusHint reads the C2 surface message (got: $(field "$json" statusHint))"
+fi
+check_no_engine_errors "$log" "partial"
+check_no_orphans "$mocklog" "partial"
+check_exit_status "partial"
+
+echo
+echo "== (4) search: searchQuery narrows every filtered list, pill follows (no \"of T\" while searching) =="
+log="$(run_scenario search search GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/search.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "search: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "search: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" beforeReposLength)" == "7" ]] && ok "search: before query, filteredRepos.length===7" \
+    || not_ok "search: before query, filteredRepos.length===7 (got: $(field "$json" beforeReposLength))"
+  [[ "$(field "$json" beforePill)" == "7 of 45" ]] && ok "search: before query, Repositories pill reads \"7 of 45\"" \
+    || not_ok "search: before query, Repositories pill reads \"7 of 45\" (got: $(field "$json" beforePill))"
+  [[ "$(field "$json" afterReposLength)" == "2" ]] && ok "search: \"vandal\" narrows filteredRepos to 2" \
+    || not_ok "search: \"vandal\" narrows filteredRepos to 2 (got: $(field "$json" afterReposLength))"
+  [[ "$(field "$json" afterIssuesLength)" == "1" ]] && ok "search: \"vandal\" narrows filteredMyIssues to 1" \
+    || not_ok "search: \"vandal\" narrows filteredMyIssues to 1 (got: $(field "$json" afterIssuesLength))"
+  [[ "$(field "$json" afterOpenPRsLength)" == "0" ]] && ok "search: \"vandal\" narrows filteredOpenPRs to 0" \
+    || not_ok "search: \"vandal\" narrows filteredOpenPRs to 0 (got: $(field "$json" afterOpenPRsLength))"
+  [[ "$(field "$json" afterPill)" == "2" ]] && ok "search: Repositories pill follows to \"2\", no \"of T\" while searching" \
+    || not_ok "search: Repositories pill follows to \"2\" (got: $(field "$json" afterPill))"
+fi
+check_no_engine_errors "$log" "search"
+check_no_orphans "$mocklog" "search"
+check_exit_status "search"
+
+echo
+echo "== (5) fold: collapsed toggles hide the section's row-list Column =="
+log="$(run_scenario fold fold GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/fold.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "fold: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "fold: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" foundRows)" == "true" ]] && ok "fold: found the PR section's row-list Column in the rendered tree" \
+    || not_ok "fold: found the PR section's row-list Column in the rendered tree"
+  [[ "$(field "$json" visibleBefore)" == "true" ]] && ok "fold: rows visible before collapsing" \
+    || not_ok "fold: rows visible before collapsing (got: $(field "$json" visibleBefore))"
+  [[ "$(field "$json" visibleAfterCollapse)" == "false" ]] && ok "fold: rows hidden after collapsing" \
+    || not_ok "fold: rows hidden after collapsing (got: $(field "$json" visibleAfterCollapse))"
+  [[ "$(field "$json" visibleAfterExpand)" == "true" ]] && ok "fold: rows visible again after expanding" \
+    || not_ok "fold: rows visible again after expanding (got: $(field "$json" visibleAfterExpand))"
+fi
+check_no_engine_errors "$log" "fold"
+check_no_orphans "$mocklog" "fold"
+check_exit_status "fold"
+
+echo
+echo "== (6) lifecycle: svc -> null -> new instance, zero TypeErrors (Panel null-guards every read) =="
+log="$(run_scenario lifecycle lifecycle GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/lifecycle.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "lifecycle: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "lifecycle: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" svcWasNonNullBeforeDestroy)" == "true" ]] && ok "lifecycle: svc existed before the destroy" \
+    || not_ok "lifecycle: svc existed before the destroy"
+  [[ "$(field "$json" heroMetaWasLoadingWhileNull)" == "true" ]] && ok "lifecycle: heroMeta=\"Loading…\" while svc was null" \
+    || not_ok "lifecycle: heroMeta=\"Loading…\" while svc was null (got: $(field "$json" heroMetaWasLoadingWhileNull))"
+  [[ "$(field "$json" svcNowIsNewInstance)" == "true" ]] && ok "lifecycle: BarWidget/Panel picked up the fresh instance" \
+    || not_ok "lifecycle: BarWidget/Panel picked up the fresh instance"
+fi
+check_no_engine_errors "$log" "lifecycle"
+check_no_orphans "$mocklog" "lifecycle"
+check_exit_status "lifecycle"
+
+echo
+echo "== (7) openItem allowlist: a non-github URL never reaches xdg-open =="
+log="$(run_scenario openitem openitem GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/openitem.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "openitem: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "openitem: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" xdgOpenLogEmpty)" == "true" ]] && ok "openitem: mock xdg-open recorded no invocation" \
+    || not_ok "openitem: mock xdg-open recorded no invocation (got log contents non-empty)"
+fi
+check_no_engine_errors "$log" "openitem"
+check_no_orphans "$mocklog" "openitem"
+check_exit_status "openitem"
+
+echo
+if [[ "$fail_count" -eq 0 ]]; then
+  echo "test/probe/run-ui: ALL CHECKS PASSED ($pass_count ok)"
+else
+  echo "test/probe/run-ui: $fail_count FAILURE(S), $pass_count ok"
+fi
+exit $(( fail_count > 0 ? 1 : 0 ))

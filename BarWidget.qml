@@ -65,6 +65,11 @@ BarWidget {
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
+  // UI-probe-only: exposes the eagerly-loaded Panel instance itself, since
+  // it's otherwise unreachable from outside this file -- see
+  // test/probe/ui-probe.qml.
+  readonly property var _debugPanelItem: panelLoader.item
+
   // The panel is loaded standalone, so it needs everything handed to it: the
   // bar, this widget's settings, and the button to anchor against.
   function injectPanel() {

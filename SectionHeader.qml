@@ -57,6 +57,11 @@ Item {
   property string fontFamily: Style.font.family
   property Component extra: null
 
+  // UI-probe-only: the pill's own rendered string, otherwise unreachable
+  // from outside this file (`pillText` is a local id) -- see
+  // test/probe/ui-probe.qml.
+  readonly property alias pillLabel: pillText.text
+
   signal toggled()
 
   // Zero-count sections keep the old auto-fold behavior (they already

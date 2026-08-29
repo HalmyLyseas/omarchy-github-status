@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# test/mocks/xdg-open -- PATH-shadowing mock for the UI probe's openItem
+# allowlist scenario (test/probe/ui-probe.qml). Logs one line per real
+# invocation so run-ui can prove a rejected URL never reaches this at all.
+set -uo pipefail
+
+if [[ -n "${GHS_XDGOPEN_LOG:-}" ]]; then
+  echo "PID=$$ ARGV: $*" >> "$GHS_XDGOPEN_LOG"
+fi
+exit 0
