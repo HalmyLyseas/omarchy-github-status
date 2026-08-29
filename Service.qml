@@ -1,18 +1,6 @@
-// Service.qml -- data layer for halmylyseas.github-status.
-//
-// A singleton (manifest kind "service"), instantiated once machine-wide by
-// shell.ensureService(). Owns every subprocess, timer, and piece of mutable
-// state; BarWidget.qml/Panel.qml only ever bind to the read-only properties
-// below and call refresh()/openUrl()/setIssuesFilter().
-//
-// Every `gh` invocation is a direct Quickshell Process child (never a shell
-// wrapper) -- see CLAUDE.md hard rules and docs/developers.md "Process
-// contract". `gh` is mise-installed, not on Quickshell's own PATH, so its
-// absolute path is resolved once via a single `bash -lc "command -v gh"`
-// call (the only shell invocation anywhere in this file); every fetch after
-// that spawns `gh` itself as a fixed argv array plus at most the ETag as a
-// separate, sanitised element -- never interpolated into a shell string.
-// No disk cache: every list below lives in QML memory only.
+// Service.qml -- data layer for halmylyseas.github-status. A singleton,
+// instantiated once machine-wide by shell.ensureService(); see
+// docs/developers.md "Architecture"/"Process contract" for the full shape.
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -26,8 +14,7 @@ Item {
   property var manifest: null
 
   // ============================================================
-  // Service public API. Every property here is DERIVED from the per-source
-  // state in `internal` below -- none are assigned directly.
+  // Service public API. Every property is DERIVED from `internal` below.
   // ============================================================
 
   // "ok" | "loading" | "no-gh" | "unauthenticated" | "offline" | "rate-limited"
@@ -39,20 +26,17 @@ Item {
   // "..."-vs-confirmed-"0" pill on the one source that actually backs it.
   readonly property double dashboardLastSyncMs: internal.dashboardLastSyncMs
   readonly property double notificationsLastSyncMs: internal.notifLastSyncMs
-  // C2: set when the last-applied dashboard fetch parsed SOME but not ALL
-  // sections (a partial GraphQL envelope) -- surfaced for the panel's
-  // "Synced * partial" hero line; the data itself is still whatever parsed.
+  // Set when the last-applied dashboard fetch parsed some but not all
+  // sections -- surfaced on the panel's "Synced * partial" hero line.
   readonly property bool dashboardPartial: internal.dashboardPartial
   readonly property string rateLimitedUntil: pickRateLimitedUntil()
   // Debug-only: raw epoch-ms companions to rateLimitedUntil's formatted
   // string, so a probe can poll "has the window actually passed" precisely.
   readonly property double _dashboardRateLimitedUntilMs: internal.dashboardRateLimitedUntilMs
   readonly property double _notificationsRateLimitedUntilMs: internal.notifRateLimitedUntilMs
-  // Debug-only: per-source status strings, so a probe can tell one source
-  // recovered even while the OTHER is still blocked (e.g. dashboard's own
-  // rate-limit reset has no header to parse in real `gh` output, so it
-  // always falls back to a +60min window -- only notifications' -i output
-  // carries a real X-Ratelimit-Reset).
+  // Debug-only: per-source status, so a probe can tell one source recovered
+  // while the other is still blocked (only notifications' -i output carries
+  // a real X-Ratelimit-Reset; the others fall back to a +60min window).
   readonly property string _dashboardStatus: internal.dashboardStatus
   readonly property string _notifStatus: internal.notifStatus
   readonly property bool busy: dashboardProc.running || notificationsProc.running
@@ -69,7 +53,7 @@ Item {
   readonly property var myIssues: Model.filterIssues(internal.myIssues, root.issuesFilter)
   readonly property int myIssuesAllCount: internal.myIssues.length
   readonly property var repos: internal.repos.slice(0, root.repoLimit)
-  // C3: the source's real GraphQL totalCount/issueCount for each section --
+  // The source's real GraphQL totalCount/issueCount for each section --
   // 0 until the first successful dashboard fetch lands one, same "not real
   // yet" default the section arrays themselves start with.
   readonly property int openPRsTotal: internal.openPRsTotal
@@ -121,12 +105,9 @@ Item {
     log("issuesFilter set to " + next)
   }
 
-  // ============================================================
   // Settings: shell.json entry for this plugin, manifest defaults as
-  // fallback. Live bindings off shell.shellConfig -- fine to keep live;
-  // what must NOT be a live binding is a Timer.interval built from one of
-  // these (see dashboardTimer/notificationsTimer below).
-  // ============================================================
+  // fallback. Live bindings off shell.shellConfig are fine here; a
+  // Timer.interval built from one of these must NOT be live (see below).
 
   readonly property var _shellConfig: shell ? shell.shellConfig : null
   readonly property var _settingsEntry: findEntry(_shellConfig, "halmylyseas.github-status")
@@ -141,9 +122,8 @@ Item {
     validIssuesFilter(settingStr(_settingsEntry, "issuesFilter", manifestDefault("issuesFilter", "focus")))
 
   // A bar-layout entry can be a bare string instead of an object -- that
-  // form renders fine but cannot carry settings (updateEntryInline only
-  // matches object entries). Delayed so shellConfig has time to move past
-  // its transient built-in-defaults state at boot.
+  // form renders fine but cannot carry settings. Delayed so shellConfig has
+  // time to move past its transient built-in-defaults state at boot.
   Timer {
     interval: 15000
     running: true
@@ -219,13 +199,9 @@ Item {
     return s
   }
 
-  // ============================================================
-  // gh path resolution + per-process plumbing. `ghPath` is resolved once at
-  // startup (deferred one tick so a test harness can override it first);
-  // tests/probes set `ghPath` directly instead (a PATH-shadowed mock's
-  // absolute path is also fine). Every *TimeoutMs/output-cap property below
-  // is plain (not readonly) so a probe can shorten it.
-  // ============================================================
+  // gh path resolution + per-process plumbing. `ghPath` resolves once at
+  // startup, or is set directly by a test/probe. Every *TimeoutMs/output-cap
+  // property below is plain (not readonly) so a probe can shorten it.
 
   property string ghPath: ""
   property int ghPathTimeoutMs: 5000
@@ -332,7 +308,7 @@ Item {
   }
 
   // Arrays are always replaced (never .push()ed) so bindings notice. A
-  // breach caps the total at the limit and SIGTERMs the process (C7/A3).
+  // breach caps the total at the limit and SIGTERMs the process.
   function _appendBoundedOutput(kind, line, errorStream) {
     if (root["_" + kind + "Overflowed"]) return
     var outLinesKey = "_" + kind + "OutputLines"
@@ -473,11 +449,9 @@ Item {
     }
   }
 
-  // ============================================================
-  // Internal state -- everything the public API above is derived from.
-  // Per-source tracking: the auth probe, the dashboard poller, and the
-  // notifications poller each own their own status/sync/rate-limit state.
-  // ============================================================
+  // Internal state the public API above derives from -- the auth probe,
+  // dashboard poller, and notifications poller each own their own
+  // status/sync/rate-limit state.
 
   QtObject {
     id: internal
@@ -501,7 +475,7 @@ Item {
     property var openPRs: []
     property var repos: []
     property var myIssues: []
-    // C3: paired with the four lists above -- only ever updated together
+    // Paired with the four lists above -- only ever updated together
     // with the section whose total it is (see handleDashboardExit).
     property int reviewRequestsTotal: 0
     property int openPRsTotal: 0
@@ -659,10 +633,8 @@ Item {
     try { return JSON.stringify(v).slice(0, 500) } catch (e) { return String(v).slice(0, 500) }
   }
 
-  // ============================================================
   // Auth probe: `gh api user --jq .login`, direct child. Run once at
   // startup, and again every 5 minutes while status is no-gh/unauthenticated.
-  // ============================================================
 
   function startProbe() {
     if (probeProc.running) return
@@ -719,10 +691,8 @@ Item {
   }
 
   // exitCode/rawOut/rawErr already reflect a real exit, a watchdog timeout
-  // (124), an output overflow (137), or a missing binary (127) -- see
-  // _finalizeProcess. classifyFailure's own exitCode===127 check is what
-  // turns a missing gh binary into "no-gh" here, with no special-casing
-  // needed for that case specifically.
+  // (124), an output overflow (137), or a missing binary (127) --
+  // classifyFailure's own exitCode===127 check turns that into "no-gh".
   function handleProbeResult(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
       var login = String(rawOut || "").replace(/^\s+|\s+$/g, "")
@@ -786,11 +756,9 @@ Item {
     startProbe()
   }
 
-  // ============================================================
   // Dashboard fetch: one combined GraphQL query, direct `gh` child. Never
   // blanks the UI on failure -- a section is only reassigned when
   // Model.mapDashboard says it actually parsed.
-  // ============================================================
 
   Timer {
     id: dashboardTimer
@@ -873,7 +841,7 @@ Item {
     }
   }
 
-  // C2: count parsed vs. null sections. All parsed -> ok. Some parsed (plus
+  // Counts parsed vs. null sections. All parsed -> ok. Some parsed (plus
   // GraphQL `errors`) -> keep the parsed sections, advance sync time, flag
   // dashboardPartial, log the errors. None parsed -> failure as before.
   function handleDashboardExit(exitCode, rawOut, rawErr) {
@@ -906,10 +874,8 @@ Item {
     handleFetchFailure("dashboard", cls, rawErr)
   }
 
-  // ============================================================
   // Notifications fetch: conditional GET, ETag round-tripped, direct `gh`
   // child. A genuine 304 (no-change) is success, not failure.
-  // ============================================================
 
   Timer {
     id: notificationsTimer
@@ -983,7 +949,7 @@ Item {
     }
   }
 
-  // C4: an exit-0 response is only trusted with a 200 status and an array
+  // An exit-0 response is only trusted with a 200 status and an array
   // body -- anything else is a failure that keeps the last-good data.
   function handleNotificationsExit(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
