@@ -488,6 +488,27 @@ function classifyFailure(stderrText, exitCode) {
   return "error"
 }
 
+// ------------------------------------------------------------------ gh version pin
+
+// Major versions of the gh CLI this plugin has actually been tested
+// against. `gh --version`'s first line reads "gh version X.Y.Z (date)".
+var SUPPORTED_GH_MAJORS = [2]
+
+// Parses that first line down to just "X.Y.Z"; "" on anything else.
+function parseGhVersion(raw) {
+  var s = safeStr(raw, "").slice(0, 256)
+  var match = s.match(/gh version\s+(\S+)/i)
+  return match ? truncate(match[1], FIELD_CAP_TAG) : ""
+}
+
+// True when the parsed version's leading major segment is a pinned one.
+// An unpinned major, or an unparsed "", reads as untested rather than
+// throwing -- gh's own text format changing is not this plugin's crash.
+function isGhVersionSupported(version) {
+  var match = String(version || "").match(/^(\d+)\./)
+  return match !== null && SUPPORTED_GH_MAJORS.indexOf(parseInt(match[1], 10)) !== -1
+}
+
 // ------------------------------------------------------------- gh argv/etag
 
 // Verbatim GraphQL query text sent as `-f query=<this>` to a direct `gh`
@@ -682,6 +703,9 @@ if (typeof module !== "undefined" && module.exports) {
     FIELD_CAP_TAG: FIELD_CAP_TAG,
     FIELD_CAP_URL: FIELD_CAP_URL,
     FIELD_CAP_COMMENTER: FIELD_CAP_COMMENTER,
-    QUERY_CAP: QUERY_CAP
+    QUERY_CAP: QUERY_CAP,
+    SUPPORTED_GH_MAJORS: SUPPORTED_GH_MAJORS,
+    parseGhVersion: parseGhVersion,
+    isGhVersionSupported: isGhVersionSupported
   }
 }

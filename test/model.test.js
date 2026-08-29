@@ -1022,6 +1022,37 @@ test("classifyFailure: unrecognized shape falls back to generic error", function
   assert.strictEqual(Model.classifyFailure(null, 2), "error")
 })
 
+// -------------------------------------------------------------------- gh version pin
+
+test("SUPPORTED_GH_MAJORS: pinned exact literal (a mutated table must not pass its own test)", function () {
+  assert.deepStrictEqual(Model.SUPPORTED_GH_MAJORS, [2])
+})
+
+test("parseGhVersion: real gh --version first line -> just the X.Y.Z segment", function () {
+  assert.strictEqual(Model.parseGhVersion("gh version 2.98.0 (2026-08-20)\nhttps://cli.github.com"), "2.98.0")
+  assert.strictEqual(Model.parseGhVersion("gh version 3.0.0 (2026-08-20)"), "3.0.0")
+})
+
+test("parseGhVersion: defensive on missing/malformed input, never throws", function () {
+  assert.strictEqual(Model.parseGhVersion(""), "")
+  assert.strictEqual(Model.parseGhVersion(null), "")
+  assert.strictEqual(Model.parseGhVersion("command not found: gh"), "")
+})
+
+test("isGhVersionSupported: true only for a pinned major (patch/minor drift doesn't matter)", function () {
+  assert.strictEqual(Model.isGhVersionSupported("2.98.0"), true)
+  assert.strictEqual(Model.isGhVersionSupported("2.0.0"), true)
+  assert.strictEqual(Model.isGhVersionSupported("2.98.0-beta"), true)
+})
+
+test("isGhVersionSupported: false for an unpinned major or unparsed input", function () {
+  assert.strictEqual(Model.isGhVersionSupported("3.0.0"), false)
+  assert.strictEqual(Model.isGhVersionSupported("1.9.0"), false)
+  assert.strictEqual(Model.isGhVersionSupported(""), false)
+  assert.strictEqual(Model.isGhVersionSupported(null), false)
+  assert.strictEqual(Model.isGhVersionSupported("v2.98.0"), false)
+})
+
 // ---------------------------------------------------------------- parseHeadersAndBody
 
 test("parseHeadersAndBody: real captured 200 notifications -i output", function () {
