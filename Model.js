@@ -634,6 +634,82 @@ function classifyFailure(stderrText, exitCode) {
   return "error"
 }
 
+// ------------------------------------------------------------- gh argv/etag
+
+// Verbatim GraphQL query text sent as `-f query=<this>` to a direct `gh`
+// child (G2 native rework) -- previously lived in scripts/fetch-dashboard's
+// heredoc. Kept as one array of lines, joined, so a diff on this file shows
+// exactly which line of the query changed.
+var DASHBOARD_QUERY = [
+  "query {",
+  "  viewer {",
+  "    login",
+  "    openPRs: pullRequests(states: OPEN, first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {",
+  "      totalCount",
+  "      nodes {",
+  "        title url number updatedAt isDraft reviewDecision",
+  "        repository { nameWithOwner }",
+  "        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
+  "        comments(last: 1) { nodes { author { login } updatedAt } }",
+  "      }",
+  "    }",
+  "    myIssues: issues(states: OPEN, first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {",
+  "      totalCount",
+  "      nodes {",
+  "        title url number updatedAt viewerSubscription",
+  "        repository { nameWithOwner }",
+  "        comments(last: 1) { nodes { author { login } updatedAt } }",
+  "      }",
+  "    }",
+  "    repositories(first: 30, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) {",
+  "      totalCount",
+  "      nodes {",
+  "        name pushedAt isPrivate isArchived isFork stargazerCount",
+  "        openIssues: issues(states: OPEN) { totalCount }",
+  "        openPRCount: pullRequests(states: OPEN) { totalCount }",
+  "        latestRelease { tagName name publishedAt url }",
+  "        defaultBranchRef {",
+  "          target {",
+  "            ... on Commit { oid messageHeadline committedDate statusCheckRollup { state } }",
+  "          }",
+  "        }",
+  "      }",
+  "    }",
+  "  }",
+  "  reviewRequests: search(query: \"is:open is:pr review-requested:@me\", type: ISSUE, first: 10) {",
+  "    nodes {",
+  "      ... on PullRequest {",
+  "        title url number updatedAt",
+  "        repository { nameWithOwner }",
+  "        comments(last: 1) { nodes { author { login } updatedAt } }",
+  "      }",
+  "    }",
+  "  }",
+  "}"
+].join("\n")
+
+// Only `[!-~]` (printable ASCII, no space/control) survives, capped at 128
+// chars -- an ETag is the one remote-derived value that becomes its own
+// argv element (`-H "If-None-Match: " + etag`), so it's sanitised before
+// that, not just length-capped (B1).
+var ETAG_SAFE_RE = /[!-~]/
+function sanitizeEtag(etag) {
+  var s = safeStr(etag, "")
+  var out = ""
+  for (var i = 0; i < s.length && out.length < 128; i++) {
+    if (ETAG_SAFE_RE.test(s.charAt(i))) out += s.charAt(i)
+  }
+  return out
+}
+
+// C4: an exit-0 notifications response is only trusted when it actually
+// carries a 200 status line and an array body -- anything else (a
+// malformed envelope, an unexpected status) must be treated as a failure
+// that keeps the last-good data, not silently mapped to an empty list.
+function isNotificationsBodyValid(parsed) {
+  return isObject(parsed) && parsed.status === 200 && isArray(parsed.body)
+}
+
 // ------------------------------------------------------ headers + body parse
 
 // Parses the combined output of `gh api -i ...`: an HTTP status line, a
@@ -760,6 +836,9 @@ if (typeof module !== "undefined" && module.exports) {
     subscribedFromViewerSubscription: subscribedFromViewerSubscription,
     matchesQuery: matchesQuery,
     filterIssues: filterIssues,
+    DASHBOARD_QUERY: DASHBOARD_QUERY,
+    sanitizeEtag: sanitizeEtag,
+    isNotificationsBodyValid: isNotificationsBodyValid,
     FIELD_CAP_TEXT: FIELD_CAP_TEXT,
     FIELD_CAP_TAG: FIELD_CAP_TAG,
     FIELD_CAP_URL: FIELD_CAP_URL,

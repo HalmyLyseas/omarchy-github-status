@@ -178,11 +178,11 @@ test("mapNotifications: per-field string length is capped (exchange/11-s5a-secur
   var mapped = Model.mapNotifications([
     { id: "1", unread: true, reason: hugeReason, subject: { title: hugeTitle, url: "" }, repository: { full_name: hugeRepo, html_url: "https://github.com/" + new Array(5000).join("w") } }
   ])
-  assert.strictEqual(mapped[0].title.length, Model.FIELD_CAP_TEXT)
-  assert.strictEqual(mapped[0].title, hugeTitle.slice(0, Model.FIELD_CAP_TEXT))
-  assert.strictEqual(mapped[0].reason.length, Model.FIELD_CAP_TAG)
-  assert.strictEqual(mapped[0].repo.length, Model.FIELD_CAP_TAG)
-  assert.ok(mapped[0].webUrl.length <= Model.FIELD_CAP_URL)
+  assert.strictEqual(mapped[0].title.length, 300)
+  assert.strictEqual(mapped[0].title, hugeTitle.slice(0, 300))
+  assert.strictEqual(mapped[0].reason.length, 100)
+  assert.strictEqual(mapped[0].repo.length, 100)
+  assert.ok(mapped[0].webUrl.length <= 2048)
 })
 
 test("mapNotifications: never evals title content even if it looks like code", function () {
@@ -523,22 +523,22 @@ test("mapDashboard: per-field string length is capped (exchange/11-s5a-security-
       reviewRequests: { nodes: [{ title: hugeText, url: "https://github.com/" + hugeTag, number: 2, updatedAt: hugeTag, repository: { nameWithOwner: hugeTag } }] }
     }
   })
-  assert.strictEqual(mapped.openPRs[0].title.length, Model.FIELD_CAP_TEXT)
-  assert.strictEqual(mapped.openPRs[0].repo.length, Model.FIELD_CAP_TAG)
-  assert.ok(mapped.openPRs[0].webUrl.length <= Model.FIELD_CAP_URL)
-  assert.strictEqual(mapped.openPRs[0].reviewDecision.length, Model.FIELD_CAP_TAG)
+  assert.strictEqual(mapped.openPRs[0].title.length, 300)
+  assert.strictEqual(mapped.openPRs[0].repo.length, 100)
+  assert.ok(mapped.openPRs[0].webUrl.length <= 2048)
+  assert.strictEqual(mapped.openPRs[0].reviewDecision.length, 100)
   // `owner` is derived from the (already-capped) `repo` field, so it is
   // naturally bounded too -- no separate cap needed, just proof it doesn't
   // explode past the repo field's own cap.
-  assert.ok(mapped.openPRs[0].owner.length <= Model.FIELD_CAP_TAG)
-  assert.strictEqual(mapped.reviewRequests[0].title.length, Model.FIELD_CAP_TEXT)
-  assert.strictEqual(mapped.repos[0].name.length, Model.FIELD_CAP_TAG)
-  assert.strictEqual(mapped.repos[0].releaseTag.length, Model.FIELD_CAP_TAG)
-  assert.strictEqual(mapped.repos[0].lastCommitHeadline.length, Model.FIELD_CAP_TEXT)
-  assert.strictEqual(mapped.myIssues[0].title.length, Model.FIELD_CAP_TEXT)
-  assert.strictEqual(mapped.myIssues[0].repo.length, Model.FIELD_CAP_TAG)
-  assert.ok(mapped.myIssues[0].webUrl.length <= Model.FIELD_CAP_URL)
-  assert.ok(mapped.myIssues[0].owner.length <= Model.FIELD_CAP_TAG)
+  assert.ok(mapped.openPRs[0].owner.length <= 100)
+  assert.strictEqual(mapped.reviewRequests[0].title.length, 300)
+  assert.strictEqual(mapped.repos[0].name.length, 100)
+  assert.strictEqual(mapped.repos[0].releaseTag.length, 100)
+  assert.strictEqual(mapped.repos[0].lastCommitHeadline.length, 300)
+  assert.strictEqual(mapped.myIssues[0].title.length, 300)
+  assert.strictEqual(mapped.myIssues[0].repo.length, 100)
+  assert.ok(mapped.myIssues[0].webUrl.length <= 2048)
+  assert.ok(mapped.myIssues[0].owner.length <= 100)
 })
 
 // ---------------------------------------------------- mapDashboard: repos F1/F2 fields
@@ -710,7 +710,7 @@ test("lastComment: adversarial -- missing author.login, non-object node, oversiz
   assert.deepStrictEqual(Model.lastComment({ nodes: ["not an object"] }), { commenter: "", commentAt: "" })
   var hugeLogin = new Array(1000).join("z")
   var c = Model.lastComment({ nodes: [{ author: { login: hugeLogin }, updatedAt: "2026-01-01T00:00:00Z" }] })
-  assert.strictEqual(c.commenter.length, Model.FIELD_CAP_COMMENTER)
+  assert.strictEqual(c.commenter.length, 40)
 })
 
 test("lastComment: only the LAST node in the connection is used (last: 1 should already only send one, defend anyway)", function () {
@@ -795,8 +795,8 @@ test("matchesQuery: unicode query matches unicode field content", function () {
 })
 
 test("matchesQuery: query longer than QUERY_CAP is truncated before matching, never throws", function () {
-  var longQuery = new Array(Model.QUERY_CAP + 500).join("a")
-  var item = { title: new Array(Model.QUERY_CAP + 500).join("a") }
+  var longQuery = new Array(100 + 500).join("a")
+  var item = { title: new Array(100 + 500).join("a") }
   // Both sides get capped the same way in practice (title itself is capped
   // at FIELD_CAP_TEXT by the mappers) -- this asserts the query side alone
   // never throws or hangs on a huge input, whatever it matches to.
@@ -962,8 +962,8 @@ test("isSafeGithubUrl: rejects any control character or whitespace anywhere in t
 
 test("isSafeGithubUrl: rejects overlong urls, accepts right at the cap", function () {
   var prefix = "https://github.com/"
-  var okAtCap = prefix + "a".repeat(Model.FIELD_CAP_URL - prefix.length)
-  assert.strictEqual(okAtCap.length, Model.FIELD_CAP_URL)
+  var okAtCap = prefix + "a".repeat(2048 - prefix.length)
+  assert.strictEqual(okAtCap.length, 2048)
   assert.strictEqual(Model.isSafeGithubUrl(okAtCap), true)
   assert.strictEqual(Model.isSafeGithubUrl(okAtCap + "a"), false)
 })
@@ -1078,6 +1078,99 @@ test("summaryTooltip: empty/all-zero state has a sensible fallback", function ()
   assert.strictEqual(Model.summaryTooltip({}), "All caught up")
   assert.strictEqual(Model.summaryTooltip(null), "All caught up")
   assert.strictEqual(Model.summaryTooltip(undefined), "All caught up")
+})
+
+// --------------------------------------------------------------- DASHBOARD_QUERY
+
+test("DASHBOARD_QUERY: pinned exact literal (G2 native rework -- was scripts/fetch-dashboard's heredoc)", function () {
+  var expected = [
+    "query {",
+    "  viewer {",
+    "    login",
+    "    openPRs: pullRequests(states: OPEN, first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {",
+    "      totalCount",
+    "      nodes {",
+    "        title url number updatedAt isDraft reviewDecision",
+    "        repository { nameWithOwner }",
+    "        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }",
+    "        comments(last: 1) { nodes { author { login } updatedAt } }",
+    "      }",
+    "    }",
+    "    myIssues: issues(states: OPEN, first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) {",
+    "      totalCount",
+    "      nodes {",
+    "        title url number updatedAt viewerSubscription",
+    "        repository { nameWithOwner }",
+    "        comments(last: 1) { nodes { author { login } updatedAt } }",
+    "      }",
+    "    }",
+    "    repositories(first: 30, ownerAffiliations: OWNER, orderBy: {field: PUSHED_AT, direction: DESC}) {",
+    "      totalCount",
+    "      nodes {",
+    "        name pushedAt isPrivate isArchived isFork stargazerCount",
+    "        openIssues: issues(states: OPEN) { totalCount }",
+    "        openPRCount: pullRequests(states: OPEN) { totalCount }",
+    "        latestRelease { tagName name publishedAt url }",
+    "        defaultBranchRef {",
+    "          target {",
+    "            ... on Commit { oid messageHeadline committedDate statusCheckRollup { state } }",
+    "          }",
+    "        }",
+    "      }",
+    "    }",
+    "  }",
+    "  reviewRequests: search(query: \"is:open is:pr review-requested:@me\", type: ISSUE, first: 10) {",
+    "    nodes {",
+    "      ... on PullRequest {",
+    "        title url number updatedAt",
+    "        repository { nameWithOwner }",
+    "        comments(last: 1) { nodes { author { login } updatedAt } }",
+    "      }",
+    "    }",
+    "  }",
+    "}"
+  ].join("\n")
+  assert.strictEqual(Model.DASHBOARD_QUERY, expected)
+  assert.ok(Model.DASHBOARD_QUERY.indexOf("mutation") === -1, "never a mutation")
+  assert.ok(Model.DASHBOARD_QUERY.indexOf("repositories(first: 30") >= 0, "repositories window pinned at 30")
+})
+
+// -------------------------------------------------------------------- sanitizeEtag (B1)
+
+test("sanitizeEtag: passes through an ordinary quoted etag unchanged", function () {
+  assert.strictEqual(Model.sanitizeEtag('"abc123"'), '"abc123"')
+})
+
+test("sanitizeEtag: strips control characters and spaces", function () {
+  assert.strictEqual(Model.sanitizeEtag('"abc\n123\t "'), '"abc123"')
+})
+
+test("sanitizeEtag: caps at 128 chars of safe content", function () {
+  var huge = '"' + "a".repeat(500) + '"'
+  var out = Model.sanitizeEtag(huge)
+  assert.strictEqual(out.length, 128)
+  assert.ok(/^[!-~]+$/.test(out))
+})
+
+test("sanitizeEtag: defensive on missing/non-string input", function () {
+  assert.strictEqual(Model.sanitizeEtag(null), "")
+  assert.strictEqual(Model.sanitizeEtag(undefined), "")
+  assert.strictEqual(Model.sanitizeEtag(123), "")
+})
+
+// --------------------------------------------------------- isNotificationsBodyValid (C4)
+
+test("isNotificationsBodyValid: true only for status 200 + array body", function () {
+  assert.strictEqual(Model.isNotificationsBodyValid({ status: 200, body: [] }), true)
+  assert.strictEqual(Model.isNotificationsBodyValid({ status: 200, body: [{ id: "1" }] }), true)
+})
+
+test("isNotificationsBodyValid: false on a malformed exit-0 envelope (C4)", function () {
+  assert.strictEqual(Model.isNotificationsBodyValid({ status: 200, body: { message: "not an array" } }), false)
+  assert.strictEqual(Model.isNotificationsBodyValid({ status: 200, body: null }), false)
+  assert.strictEqual(Model.isNotificationsBodyValid({ status: 500, body: [] }), false)
+  assert.strictEqual(Model.isNotificationsBodyValid(null), false)
+  assert.strictEqual(Model.isNotificationsBodyValid(undefined), false)
 })
 
 // ------------------------------------------------------------------------------ summary
