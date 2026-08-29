@@ -199,10 +199,11 @@ check_no_engine_errors "$log" "unauth-refresh"
 echo
 echo "== no-gh (ghPath empty) -> recovery when the mock appears on PATH =="
 # `bash -lc` is a LOGIN shell -- it re-derives PATH from startup files, so
-# only an empty HOME with no rc files makes `type -P gh` see nothing.
+# the isolated HOME pins PATH to the link dir (a host gh must stay unseen).
 linkdir="$OUT_DIR/no-gh-link"
 emptyhome="$OUT_DIR/no-gh-home"
 mkdir -p "$linkdir" "$emptyhome"
+printf 'PATH="%s"\n' "$linkdir" > "$emptyhome/.bash_profile"
 log="$(run_scenario no-gh GHS_SCENARIO=no-gh-recover GHS_LINK_PATH="$linkdir/gh" GHS_MOCK_PATH="$MOCK_PATH" \
   HOME="$emptyhome" PATH="$linkdir:/usr/bin:/bin")"
 json="$(json_line "$log")"
@@ -224,10 +225,12 @@ check_no_engine_errors "$log" "no-gh"
 echo
 echo "== removed-mid-session: mock deleted after ok -> no-gh -> recreated -> recovery =="
 linkdir2="$OUT_DIR/removed-link"
-mkdir -p "$linkdir2"
+emptyhome2="$OUT_DIR/removed-home"
+mkdir -p "$linkdir2" "$emptyhome2"
 ln -sfn "$MOCK_PATH" "$linkdir2/gh"
+printf 'PATH="%s"\n' "$linkdir2" > "$emptyhome2/.bash_profile"
 log="$(run_scenario removed GH_MOCK_MODE=ok GHS_GHPATH="$linkdir2/gh" GHS_SCENARIO=removed-recover \
-  GHS_LINK_PATH="$linkdir2/gh" GHS_MOCK_PATH="$MOCK_PATH" PATH="$linkdir2:/usr/bin:/bin")"
+  GHS_LINK_PATH="$linkdir2/gh" GHS_MOCK_PATH="$MOCK_PATH" HOME="$emptyhome2" PATH="$linkdir2:/usr/bin:/bin")"
 json="$(json_line "$log")"
 mocklog="$OUT_DIR/removed.mock.log"
 if [[ -z "$json" ]]; then
