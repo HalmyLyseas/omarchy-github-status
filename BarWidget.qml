@@ -1,15 +1,6 @@
-// BarWidget.qml -- bar entry point for halmylyseas.github-status.
-//
-// Owns only the button + the icon/count-pill composite. The panel is a
-// separate QML file loaded eagerly (not lazily on first click) via a Loader
-// with active: true, per exchange/03-shell-api.md §4 -- the canonical
-// pattern shared by clock/weather/Ristretto. Panels/services own no global
-// state of their own; timers and subprocesses live in Service.qml (§3).
-//
-// The widget is always visible, even when the service reports "no-gh" or
-// "unauthenticated" -- the panel carries the setup hint (06-design.md
-// "Degradation states"), so hiding the bar icon would hide the one place a
-// first-time user learns what to do next.
+// BarWidget.qml -- bar entry point. Owns only the button + icon/count-pill
+// composite; Panel.qml loads eagerly via a Loader. Always visible, even
+// degraded -- the panel itself carries the setup hint.
 import QtQuick
 import qs.Commons
 import qs.Ui
@@ -28,10 +19,8 @@ BarWidget {
   readonly property bool hasAttention: svc ? svc.hasAttention === true : false
 
   // Counts open PRs whose CI rollup is "failure" -- feeds the bar tooltip
-  // summary only; svc.hasAttention (the contract's own derived flag) is what
-  // actually drives the icon's urgent recolor, so this can never disagree
-  // with the icon about *whether* something needs attention, only add detail
-  // to *why*.
+  // summary only; svc.hasAttention drives the icon's urgent recolor, so
+  // this never disagrees with the icon about whether attention is needed.
   function failingCiCount(prs) {
     if (!prs) return 0
     var n = 0
@@ -113,8 +102,7 @@ BarWidget {
     onPressed: function(b) { root.toggle() }
 
     // Icon + count-pill composite -- no first-party widget renders a numeric
-    // badge (exchange/03-shell-api.md §10/§13#13), so this is bespoke but
-    // built entirely from Style/Color tokens.
+    // badge, so this is bespoke but built entirely from Style/Color tokens.
     iconComponent: Component {
       Item {
         width: Style.bar.iconCanvas

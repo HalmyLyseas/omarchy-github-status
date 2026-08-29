@@ -1,42 +1,6 @@
-// SectionHeader.qml -- kit-styled panel section header: a small-caps label
-// (PanelSectionHeader) plus a right-aligned count pill, used by all five
-// sections in Panel.qml (Inbox, Review requests, My open PRs, My open
-// issues, Repositories) per exchange/19-feedback-delta-spec.md F4. ("Repo
-// activity" was renamed "Repositories" by exchange/33-feedback3-delta-spec.md
-// H3 -- see the next paragraph.)
-//
-// Pill text: the rendered count (post-cap/slice/filter -- whatever the
-// caller is actually about to draw), or "…" before the service's first
-// successful sync (synced === false). Count text is PlainText even though
-// it is numeric/synthesized -- cheap insurance, matches the file-wide
-// policy in Panel.qml.
-//
-// `extra` is an optional Component instantiated between the label and the
-// count pill. Historically Panel.qml used this for the F1 repo-sort toggle
-// in the Repo activity header ("left of the count pill" per the spec) and,
-// per exchange/26-feedback2-delta-spec.md G4, the single-toggle chip in the
-// My open issues header (Focus/All at first, later H1's single "Subscribed"
-// chip). exchange/33-feedback3-delta-spec.md H3 removed the sort feature
-// entirely and renamed the section "Repositories" -- that header no longer
-// passes `extra` at all. The issues header is the only remaining user.
-//
-// exchange/26-feedback2-delta-spec.md G3 (fold): a header is clickable
-// (toggles Panel.qml's per-section `collapsed` state) exactly when it is
-// both synced and has count > 0 -- an unsynced ("…") or genuinely-empty
-// (count === 0) header is inert, same as before this delta. `collapsed` is
-// owned by the caller (Panel.qml), not this component -- this file only
-// reads it to paint the chevron and emits `toggled()` on click, the same
-// "state lives in the parent, child just reports the click" shape as
-// ButtonGroup's `value`/`changed(value)`.
-//
-// Hit-area separation (G3's own requirement, "verify by geometry, not
-// hope"): the fold click/hover region is sized to
-// `trailing.x - a small gap`, i.e. it stops exactly where the trailing Row
-// (extra + pill) begins. That Row's own children (the issues header's
-// toggle chip when present, the count pill) sit strictly to the right of
-// that boundary and are never covered by the fold MouseArea, so a click on
-// the toggle can never register as a fold -- this is a real non-overlapping
-// rectangle, not a z-order/event-consumption trick.
+// SectionHeader.qml -- kit-styled section header: a small-caps label, a
+// right-aligned count pill, and an optional `extra` Component, shared by
+// every Panel.qml section (see docs/developers.md, "Architecture").
 import QtQuick
 import qs.Commons
 import qs.Ui
@@ -46,10 +10,9 @@ Item {
 
   property string text: ""
   property int count: 0
-  // C3: the source's real GraphQL totalCount/issueCount, when larger than
-  // `count` (the rendered/capped/filtered length) -- 0 (the default) never
-  // triggers the "N of T" form, so callers with no total concept (Inbox)
-  // need not pass anything.
+  // The source's real GraphQL totalCount/issueCount, when larger than
+  // `count` -- 0 (the default) never triggers the "N of T" form, so a
+  // caller with no total concept (Inbox) need not pass anything.
   property int total: 0
   property bool synced: true
   property bool collapsed: false
@@ -75,10 +38,9 @@ Item {
     pill.implicitHeight,
     extraLoader.item ? extraLoader.item.implicitHeight : 0)
 
-  // Fold hover/click surface -- left edge to `trailing`'s left edge only,
-  // see header comment. Sits behind headerText/chevron (declared first),
-  // never behind `trailing` (declared after, and geometrically excluded
-  // anyway).
+  // Fold hover/click surface -- left edge to `trailing`'s left edge only.
+  // Sits behind headerText/chevron (declared first), geometrically
+  // excluded from `trailing` (declared after) regardless.
   Rectangle {
     id: foldHoverBg
     visible: root.clickable
@@ -109,11 +71,9 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
   }
 
-  // "Folded by user" indicator -- deliberately absent (not just invisible:
-  // not instantiated with empty text) when the header isn't clickable, so
-  // an empty/unsynced section reads exactly as it did before this delta
-  // (header + pill, nothing else) and a folded populated section reads
-  // distinctly (chevron flips to "▸").
+  // "Folded" indicator -- absent entirely (not just invisible) when the
+  // header isn't clickable, so an empty/unsynced section reads as header +
+  // pill only; a folded populated section reads distinctly ("▸" vs "▾").
   Text {
     id: chevron
     visible: root.clickable
@@ -151,10 +111,9 @@ Item {
       Text {
         id: pillText
         anchors.centerIn: parent
-        // C3: "N of T" once the source reports a real total larger than
-        // what's actually rendered -- the caller (Panel.qml) is the one
-        // that suppresses `total` to 0 during an active search, so this
-        // component itself doesn't need to know about search at all.
+        // "N of T" once the source reports a real total larger than what's
+        // rendered -- the caller suppresses `total` to 0 during an active
+        // search, so this component doesn't need to know about search.
         text: root.synced
           ? (root.total > root.count ? String(root.count) + " of " + String(root.total) : String(root.count))
           : "…"
