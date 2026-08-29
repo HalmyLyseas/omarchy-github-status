@@ -7,6 +7,16 @@ shell invocation left). The three script rows below and the process-contract
 sections that describe them predate that change; treat `Service.qml` itself
 as the source of truth until this file gets its full rewrite.
 
+**G3 UI note:** `SectionHeader.qml` gained a `total` property (Service's
+`openPRsTotal`/`reviewRequestsTotal`/`reposTotal`/`myIssuesTotal`, sourced
+from GraphQL `totalCount`/`issueCount`) — a section's pill now reads
+`"N of T"` once the real total exceeds what's rendered, `"N"` otherwise;
+Panel suppresses `total` to 0 while a search is active, so the pill always
+shows the filtered count alone then. The repo release-tag pill now elides
+past a fixed width, matching `InlinePill`. The hero meta line and status
+hint both call out `svc.dashboardPartial` (C2). The `## Testing` section
+below predates this too — see its own note.
+
 The distilled why and how of this plugin, for a contributor (or a future
 maintenance session) starting from a bare clone. The README covers using it;
 `CLAUDE.md` carries the project rules and hard constraints. Everything here
@@ -610,6 +620,20 @@ Nothing in either UI file spawns a process, opens a URL, or touches
   outside this project's remit entirely (`CLAUDE.md` hard rule 4).
 
 ## Testing
+
+**Stale, pending G4's full rewrite:** this section predates both the G2
+native rework (`test/scripts.test.sh` is gone with `scripts/`) and G3's
+actual probe suites. Current facts: `./test/all` runs, in order,
+`test/model.test.js` (Node, pure `Model.js`), `test/qml-sinks.test.js`
+(Node; scans every `.qml` file at the plugin root for a `Text{}` sink
+missing `textFormat: Text.PlainText`), `test/probe/run` (a `qs -n -p`
+instance loading the real `Service.qml` against `test/mocks/gh`, driving
+its full status ladder incl. the C2/C4 folded findings), and
+`test/probe/run-ui` (a second `qs -n -p` instance loading the real
+`BarWidget.qml`/`Panel.qml` — which itself eagerly loads `Panel.qml` — 
+against a stub `bar`/`shell` and that same mock `gh`, covering rendering,
+the C3 pills, the degraded ladder, C2's partial surfacing, search, fold,
+the `svc` null→new-instance lifecycle, and the `openUrl` allowlist).
 
 - `./test/all` runs both suites and exits non-zero on any failure:
   - `node test/model.test.js` — every `Model.js` export, pure-function
