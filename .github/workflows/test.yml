@@ -1,0 +1,106 @@
+name: test
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      # An archlinux:latest container ships pacman but not git; git is not
+      # one of pacman's own dependencies, so install it before checkout can
+      # run (steps execute in the order listed, checkout does not have to
+      # be first).
+      - name: Install git
+        run: pacman -Sy --noconfirm git
+
+      - uses: actions/checkout@v7
+
+      - name: Trust the checkout (container runs as root, workspace is owned by the runner uid)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Enable the omarchy pacman repo
+        run: |
+          # Same repo/SigLevel an installed Omarchy system carries in
+          # /etc/pacman.conf -- Optional TrustAll is the upstream project's
+          # own choice, not something loosened for CI.
+          printf '[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/stable/$arch\n' >> /etc/pacman.conf
+
+      - name: Install test dependencies
+        run: |
+          # Measured set: quickshell (qs, and pulls in qt6-declarative's
+          # qmllint as a side effect) + cage (headless Wayland compositor)
+          # run the probe suites; nodejs runs the JS suites; procps-ng
+          # provides `ps`; github-cli (from `extra`) runs the version-pin
+          # half of the CLI contract test -- CI has no credentials, so its
+          # auth half skips itself; jq is what usr/share/omarchy/bin/
+          # omarchy-plugin-validate itself needs.
+          pacman -Syu --noconfirm quickshell cage nodejs procps-ng jq github-cli
+
+      - name: Extract the Omarchy shell QML tree and plugin-validate script
+        run: |
+          # The `omarchy` package itself is a ~120MB meta-package that pulls
+          # in the whole desktop via its own Depends, none of which this
+          # headless test run needs -- only the static QML files under
+          # /usr/share/omarchy/shell (BarWidget.qml/Panel.qml import as
+          # qs.Ui/qs.Commons) and usr/share/omarchy/bin (omarchy-plugin-
+          # validate, below). `-Swdd` downloads the package to the local
+          # cache without installing it, WITHOUT resolving its dependency
+          # chain: plain `-Sw` also caches the hard-Depends omarchy-settings
+          # package, and the glob below would then match both archives.
+          # bsdtar is always present in this container (it ships in
+          # libarchive, a hard dependency of pacman itself), and the package
+          # has no .INSTALL scriptlet, so nothing is lost by never running
+          # `pacman -S omarchy`.
+          pacman -Swdd --noconfirm omarchy
+          shopt -s nullglob
+          pkgs=(/var/cache/pacman/pkg/omarchy-[0-9]*-any.pkg.tar.zst)
+          if [[ ${#pkgs[@]} -ne 1 ]]; then
+            echo "expected exactly one omarchy package archive, found ${#pkgs[@]}: ${pkgs[*]}" >&2
+            exit 1
+          fi
+          # usr/share/omarchy/bin/omarchy-plugin-validate is a symlink into usr/bin.
+          bsdtar -x -C / -f "${pkgs[0]}" usr/share/omarchy/shell usr/share/omarchy/bin usr/bin/omarchy-plugin-validate
+          ls -la /usr/bin/omarchy-plugin-validate /usr/share/omarchy/shell/Ui/Panel.qml
+
+      - name: qmllint every .qml file (0 errors required, warnings allowed)
+        run: |
+          mkdir -p /tmp/qmlroot
+          ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
+          status=0
+          count=0
+          while IFS= read -r -d '' f; do
+            count=$((count + 1))
+            out="$(/usr/lib/qt6/bin/qmllint -I /tmp/qmlroot -I /usr/share/omarchy/shell "$f" 2>&1)"
+            if grep -q ':[0-9]*:[0-9]*: Error' <<<"$out"; then
+              echo "$out"
+              status=1
+            fi
+          done < <(git ls-files -z '*.qml')
+          echo "qmllint checked $count files"
+          [[ $count -ge 5 ]] || { echo "expected at least 5 .qml files, linted $count" >&2; exit 1; }
+          exit $status
+
+      - name: omarchy plugin validate (manifest schema, entry points, no symlinks)
+        run: /usr/bin/omarchy-plugin-validate .
+
+      - name: Node unit tests (Model.js, QML Text-sink audit, comment hygiene)
+        run: node --test test/*.test.js
+
+      - name: CLI contract (read-only; skips cleanly without a real authenticated gh)
+        run: node test/cli-contract.mjs
+
+      - name: Headless service/UI probes (cage)
+        env:
+          WLR_BACKENDS: headless
+          WLR_RENDERER: pixman
+          WLR_LIBINPUT_NO_DEVICES: "1"
+          XDG_RUNTIME_DIR: /tmp/xdg-runtime
+          QT_QUICK_BACKEND: software
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          cage -- bash test/probe/run
+          cage -- bash test/probe/run-ui

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Local mirror of .github/workflows/test.yml. Default: cage (install it
+# yourself, Arch `extra` -- this script never installs packages).
+# --no-cage: use this session's own Wayland display instead.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+no_cage=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-cage) no_cage=1 ;;
+    *) echo "test/ci-local: unknown argument: $arg" >&2; exit 2 ;;
+  esac
+done
+
+overall=0
+run_step() {
+  echo "== $* =="
+  if ! "$@"; then overall=1; fi
+  echo
+}
+
+# Same qmllint/validate gate CI runs, against this box's already-installed
+# /usr/share/omarchy/shell instead of a freshly extracted package.
+QMLLINT_BIN="$(command -v qmllint || command -v /usr/lib/qt6/bin/qmllint || true)"
+qmllint_all() {
+  mkdir -p /tmp/qmlroot && ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
+  local status=0 f out
+  while IFS= read -r -d '' f; do
+    out="$("$QMLLINT_BIN" -I /tmp/qmlroot -I /usr/share/omarchy/shell "$f" 2>&1)"
+    if grep -q ':[0-9]*:[0-9]*: Error' <<<"$out"; then echo "$out"; status=1; fi
+  done < <(git -C "$PLUGIN_DIR" ls-files -z '*.qml')
+  return $status
+}
+if [[ -z "$QMLLINT_BIN" ]]; then
+  echo "test/ci-local: qmllint not found (Arch \`qt6-declarative\`, pulled in by quickshell)" >&2
+  overall=1
+else
+  run_step qmllint_all
+fi
+run_step omarchy plugin validate "$PLUGIN_DIR"
+run_step node --test "$SCRIPT_DIR"/*.test.js
+run_step node "$SCRIPT_DIR/cli-contract.mjs"
+
+if [[ "$no_cage" -eq 1 ]]; then
+  # test/probe/run and run-ui already skip themselves without `qs`, so this
+  # branch just runs them plainly against whatever display is already live.
+  run_step bash "$SCRIPT_DIR/probe/run"
+  run_step bash "$SCRIPT_DIR/probe/run-ui"
+else
+  if ! command -v cage >/dev/null 2>&1; then
+    echo "test/ci-local: \`cage\` not found on PATH -- install it first (Arch \`extra\`)," >&2
+    echo "or re-run with --no-cage to use this session's own display instead." >&2
+    exit 1
+  fi
+  export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$(mktemp -d)}"
+  mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+  run_step cage -- bash "$SCRIPT_DIR/probe/run"
+  run_step cage -- bash "$SCRIPT_DIR/probe/run-ui"
+fi
+
+echo
+if [[ $overall -eq 0 ]]; then
+  echo "test/ci-local: ALL SUITES PASSED"
+else
+  echo "test/ci-local: FAILURES ABOVE"
+fi
+exit $overall
