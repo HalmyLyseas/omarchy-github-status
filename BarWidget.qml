@@ -118,6 +118,7 @@ BarWidget {
         Text {
           anchors.centerIn: parent
           text: ""
+          textFormat: Text.PlainText
           color: button.active && button.useActiveColor ? button.activeColor : button.foreground
           font.family: button.fontFamily
           font.pixelSize: button.fontSize
@@ -141,6 +142,7 @@ BarWidget {
             // badgeText() caps the display at "99+" -- Model.js §"bar text",
             // the same cap the service itself applies to unreadCount.
             text: Model.badgeText(root.unreadCount)
+            textFormat: Text.PlainText
             color: Color.background
             font.family: button.fontFamily
             font.pixelSize: Style.font.caption

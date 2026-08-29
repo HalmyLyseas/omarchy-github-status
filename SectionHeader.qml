@@ -46,6 +46,11 @@ Item {
 
   property string text: ""
   property int count: 0
+  // C3: the source's real GraphQL totalCount/issueCount, when larger than
+  // `count` (the rendered/capped/filtered length) -- 0 (the default) never
+  // triggers the "N of T" form, so callers with no total concept (Inbox)
+  // need not pass anything.
+  property int total: 0
   property bool synced: true
   property bool collapsed: false
   property color foreground: Color.foreground
@@ -141,7 +146,13 @@ Item {
       Text {
         id: pillText
         anchors.centerIn: parent
-        text: root.synced ? String(root.count) : "…"
+        // C3: "N of T" once the source reports a real total larger than
+        // what's actually rendered -- the caller (Panel.qml) is the one
+        // that suppresses `total` to 0 during an active search, so this
+        // component itself doesn't need to know about search at all.
+        text: root.synced
+          ? (root.total > root.count ? String(root.count) + " of " + String(root.total) : String(root.count))
+          : "…"
         textFormat: Text.PlainText
         elide: Text.ElideRight
         color: root.foreground

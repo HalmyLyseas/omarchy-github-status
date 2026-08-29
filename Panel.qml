@@ -294,7 +294,11 @@ Panel {
     if (!svc) return "Loading…"
     if (svc.status === "loading") return "Loading…"
     if (svc.busy === true) return "Syncing…"
-    return lastSyncLabel()
+    // C2 surface: dashboardPartial means the last-applied dashboard fetch
+    // only parsed some sections -- the rest still show last-known data,
+    // called out right next to the sync time rather than only in the
+    // status-hint block below.
+    return svc.dashboardPartial ? lastSyncLabel() + " · partial" : lastSyncLabel()
   }
 
   // ---------------------------------------------------- degradation states
@@ -307,16 +311,24 @@ Panel {
 
   readonly property string statusHint: {
     if (!svc) return ""
+    var base = ""
     switch (svc.status) {
-      case "no-gh": return "GitHub CLI (gh) not found. Install it from https://cli.github.com/."
-      case "unauthenticated": return "Not signed in — run \"gh auth login\" in a terminal."
-      case "offline": return "Offline — showing last-known data."
+      case "no-gh": base = "GitHub CLI (gh) not found. Install it from https://cli.github.com/."; break
+      case "unauthenticated": base = "Not signed in — run \"gh auth login\" in a terminal."; break
+      case "offline": base = "Offline — showing last-known data."; break
       case "rate-limited": {
         var until = svc.rateLimitedUntil
-        return "Rate-limited — resuming" + (until ? " at " + until : " shortly") + ". Showing last-known data."
+        base = "Rate-limited — resuming" + (until ? " at " + until : " shortly") + ". Showing last-known data."
+        break
       }
-      default: return ""
+      default: base = ""
     }
+    // C2 surface: appended (not replacing) whatever the status ladder
+    // above already says, since a degraded status and a partial dashboard
+    // fetch are independent conditions that can both be true at once.
+    if (!svc.dashboardPartial) return base
+    var partialHint = "Some sections failed to load — showing last-known data for them."
+    return base ? base + " " + partialHint : partialHint
   }
 
   // ---------------------------------------------------------- CI + review
@@ -436,6 +448,7 @@ Panel {
             iconComponent: Component {
               Text {
                 text: ""
+                textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
@@ -572,6 +585,7 @@ Panel {
               anchors.leftMargin: Style.space(12)
               anchors.rightMargin: Style.space(12)
               text: root.statusHint
+              textFormat: Text.PlainText
               wrapMode: Text.WordWrap
               color: root.statusHintSevere ? root.urgent : root.dim
               font.family: root.fontFamily
@@ -630,6 +644,11 @@ Panel {
             SectionHeader {
               text: "REVIEW REQUESTS"
               count: root.filteredReviewRequests.length
+              // C3: 0 during an active search -- the pill shows the
+              // filtered length only then, never "N of T" against the
+              // unfiltered total (root.searchActive gate matches every
+              // other section header below).
+              total: root.searchActive ? 0 : (svc ? (Number(svc.reviewRequestsTotal) || 0) : 0)
               synced: root.dashboardSynced
               collapsed: root.reviewRequestsCollapsed
               foreground: root.foreground
@@ -666,6 +685,9 @@ Panel {
             SectionHeader {
               text: "MY OPEN PULL REQUESTS"
               count: root.filteredOpenPRs.length
+              // C3: see the REVIEW REQUESTS header above for the
+              // search-suppression rule.
+              total: root.searchActive ? 0 : (svc ? (Number(svc.openPRsTotal) || 0) : 0)
               synced: root.dashboardSynced
               collapsed: root.openPRsCollapsed
               foreground: root.foreground
@@ -719,6 +741,9 @@ Panel {
             SectionHeader {
               text: "MY OPEN ISSUES"
               count: root.filteredMyIssues.length
+              // C3: see the REVIEW REQUESTS header above for the
+              // search-suppression rule.
+              total: root.searchActive ? 0 : (svc ? (Number(svc.myIssuesTotal) || 0) : 0)
               synced: root.dashboardSynced
               collapsed: root.myIssuesCollapsed
               foreground: root.foreground
@@ -797,6 +822,9 @@ Panel {
             SectionHeader {
               text: "REPOSITORIES"
               count: root.filteredRepos.length
+              // C3: see the REVIEW REQUESTS header above for the
+              // search-suppression rule.
+              total: root.searchActive ? 0 : (svc ? (Number(svc.reposTotal) || 0) : 0)
               synced: root.dashboardSynced
               collapsed: root.repoActivityCollapsed
               foreground: root.foreground
@@ -1243,6 +1271,7 @@ Panel {
     Text {
       id: prGlyph
       text: root.ciGlyph(prRow.item ? prRow.item.ciState : "none")
+      textFormat: Text.PlainText
       color: root.ciColor(prRow.item ? prRow.item.ciState : "none")
       font.family: root.fontFamily
       font.pixelSize: Style.font.body
@@ -1510,7 +1539,12 @@ Panel {
         BorderSurface {
           id: releasePill
           visible: !!(repoRow.item && repoRow.item.releaseTag)
-          implicitWidth: releaseText.implicitWidth + Style.space(10)
+          // C6: a release tag is remote-derived (repo maintainers name
+          // their own tags) and this file's own FIELD_CAP_TAG only bounds
+          // it to 100 chars -- still wide enough to stretch the repo row.
+          // Capped the same way InlinePill caps its own text, below.
+          property real maxTextWidth: Style.space(72)
+          implicitWidth: Math.min(releaseText.implicitWidth, releasePill.maxTextWidth) + Style.space(10)
           implicitHeight: releaseText.implicitHeight + Style.space(4)
           anchors.verticalCenter: parent.verticalCenter
           color: "transparent"
@@ -1523,6 +1557,7 @@ Panel {
             text: repoRow.item ? repoRow.item.releaseTag : ""
             textFormat: Text.PlainText
             elide: Text.ElideRight
+            width: Math.min(implicitWidth, releasePill.maxTextWidth)
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
