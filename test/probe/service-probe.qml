@@ -32,7 +32,7 @@ ShellRoot {
       item.probeTimeoutMs = 1500
       item.dashboardTimeoutMs = 1500
       item.notificationsTimeoutMs = 1500
-      item.reProbeMs = 800
+      item.reProbeMs = probeRoot.scenario === "unauth-recover-refresh" ? 600000 : 800
       if (probeRoot.scenario === "flood") {
         item.dashboardOutputCharsCap = 2000
         item.finiteOutputChars = 2000
@@ -119,9 +119,16 @@ ShellRoot {
       writeModeFile("ok", function () {
         _waitUntil(4000, function () { return service.status === "ok" }, finishNow)
       })
+    } else if (scenario === "unauth-recover-refresh") {
+      // reProbeMs is left long here -- recovery must come from refresh()
+      // itself calling startProbe(), not from the re-probe timer firing.
+      writeModeFile("ok", function () {
+        service.refresh()
+        _waitUntil(4000, function () { return service.status === "ok" }, finishNow)
+      })
     } else if (scenario === "no-gh-recover") {
       // The mock's directory joins PATH once this process creates the
-      // symlink -- bash's own `command -v gh` (real, not mocked) then
+      // symlink -- bash's own `type -P gh` (real, not mocked) then
       // finds it on the next shortened reProbeMs cycle.
       createLink(function () {
         _waitUntil(4000, function () { return service.status === "ok" }, finishNow)

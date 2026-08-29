@@ -79,6 +79,11 @@ Item {
       forceResolveGhPath()
       return
     }
+    if (root.status === "unauthenticated") {
+      log("refresh(): unauthenticated -- re-probing immediately")
+      startProbe()
+      return
+    }
     if (dashboardProc.running || notificationsProc.running) {
       log("refresh() requested but already busy -- ignored")
       return
@@ -405,14 +410,14 @@ Item {
 
   function forceResolveGhPath() {
     if (ghPathProc.running) return
-    ghPathProc.command = ["bash", "-lc", "command -v gh"]
+    ghPathProc.command = ["bash", "-lc", "type -P gh"]
     _armProcess("ghPath")
   }
 
   function handleGhPathExit(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
       var resolved = String(rawOut || "").split("\n")[0].replace(/^\s+|\s+$/g, "")
-      if (resolved) {
+      if (resolved && resolved.charAt(0) === "/") {
         root.ghPath = resolved
         log("gh resolved at " + resolved)
         startProbe()

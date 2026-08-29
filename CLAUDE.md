@@ -31,7 +31,7 @@ human approval and is never performed by an agent.**
    never a mutation, never `-X POST/PATCH/PUT/DELETE`, never any gh
    subcommand that changes remote state.
 3. **`gh` is a direct Quickshell `Process` child, never a shell wrapper.**
-   Its path is resolved once via `bash -lc "command -v gh"` (the only shell
+   Its path is resolved once via `bash -lc "type -P gh"` (the only shell
    invocation anywhere); every fetch after that is a fixed argv array plus
    at most a sanitised ETag as its own element.
 4. **Security invariants are non-negotiable**: no disk cache of GitHub data

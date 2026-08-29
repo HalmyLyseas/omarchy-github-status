@@ -41,16 +41,17 @@ directly from one of these (see "Process contract" below).
 **Every `gh` invocation is a direct Quickshell `Process` child** — no shell
 wrapper anywhere on the CLI path. `gh` is mise-installed, not on
 Quickshell's own PATH, so its absolute path is resolved once via a single
-`bash -lc "command -v gh"` call (the only shell invocation anywhere in this
-plugin); every fetch after that spawns `gh` itself as a fixed argv array
-plus at most a sanitised ETag as a separate element — never interpolated
-into a shell string.
+`bash -lc "type -P gh"` call (the only shell invocation anywhere in this
+plugin, and the only form that always prints an executable's real path,
+ignoring shell functions/aliases); every fetch after that spawns `gh`
+itself as a fixed argv array plus at most a sanitised ETag as a separate
+element — never interpolated into a shell string.
 
 Five `Process` objects, one contract each (`Service.qml`):
 
 | Process | Command | Deadline | Caps |
 |---|---|---|---|
-| `ghPathProc` | `["bash","-lc","command -v gh"]` | `ghPathTimeoutMs` (5s) | shared line/char caps |
+| `ghPathProc` | `["bash","-lc","type -P gh"]` | `ghPathTimeoutMs` (5s) | shared line/char caps |
 | `ghVersionProc` | `[gh, "--version"]` | `ghVersionTimeoutMs` (5s) | shared line/char caps |
 | `probeProc` | `[gh, "api", "user", "--jq", ".login"]` | `probeTimeoutMs` (30s) | shared line/char caps |
 | `dashboardProc` | `[gh, "api", "graphql", "-f", "query="+Model.DASHBOARD_QUERY]` | `dashboardTimeoutMs` (30s) | `dashboardOutputCharsCap` (2MB, one JSON line) |
@@ -71,7 +72,7 @@ a per-kind generation counter (bumped on every arm, stamped by the real
 still-running process — this synthesizes exit code 127 exactly when a real
 `exited` never came.
 
-**Output caps**: one shared `_appendBoundedOutput` helper backs all four
+**Output caps**: one shared `_appendBoundedOutput` helper backs all five
 processes' buffers. Arrays are always **replaced**, never `.push()`ed, so
 QML bindings notice. On breach, the line is capped so the total lands at
 the limit, `signal(15)` is sent, and an overflow counter increments.

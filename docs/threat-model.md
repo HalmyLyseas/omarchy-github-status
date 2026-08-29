@@ -50,12 +50,12 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
   API, not an untrusted process.
 - **The mise shim, not `gh` itself, is `Service.qml`'s direct child during
   path resolution.** `resolveGhPath()`'s one shell invocation
-  (`bash -lc "command -v gh"`) is a login shell resolving PATH through mise;
+  (`bash -lc "type -P gh"`) is a login shell resolving PATH through mise;
   every fetch *after* that point spawns the resolved absolute `gh` path
   directly, with no shell in between. Accepted because the one shell call
   is fixed (no remote/user data in its command line) and read-only
-  (`command -v`, nothing executed).
-- **`internal.login` never refreshes once known.** A mid-session `gh
+  (`type -P`, nothing executed).
+- **`internal.login` never refreshes once known.** A mid-session `gh`
   account switch would leave the isExternal/owner pills using the stale
   identity until a restart — cosmetic only (no wrong data fetched; `gh`
   itself remains the authenticated identity for every real API call).
