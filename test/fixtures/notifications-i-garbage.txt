@@ -1,0 +1,7 @@
+HTTP/2.0 200 OK
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Type: application/json; charset=utf-8
+Etag: "mock-etag-garbage"
+X-Poll-Interval: 60
+
+{"message": "not an array, a malformed envelope"}

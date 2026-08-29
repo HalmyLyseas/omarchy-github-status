@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+# test/probe/run -- mock-gh service probe suite: runs test/probe/service-probe.qml
+# under `qs -n -p` with test/mocks/gh standing in for the real `gh`, driving
+# the real Service.qml through its full status ladder. Skips without `qs`.
+# Logs go to files (qs block-buffers pipes).
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MOCKS="$PLUGIN_DIR/test/mocks"
+OUT_DIR="$(mktemp -d)"
+trap 'rm -rf "$OUT_DIR"' EXIT
+
+fail_count=0
+pass_count=0
+ok() { pass_count=$((pass_count + 1)); echo "ok - $1"; }
+not_ok() { fail_count=$((fail_count + 1)); echo "NOT OK - $1"; }
+
+if ! command -v qs >/dev/null 2>&1; then
+  echo "test/probe/run: no \`qs\` on PATH (no Wayland session?) -- skipping mock probe suite"
+  exit 0
+fi
+
+run_scenario() {
+  local label="$1"; shift
+  local log="$OUT_DIR/$label.log"
+  local mocklog="$OUT_DIR/$label.mock.log"
+  : > "$mocklog"
+  env GH_MOCK_LOG="$mocklog" GHS_PLUGIN_DIR="$PLUGIN_DIR" "$@" \
+    timeout 30 qs -n -p "$PLUGIN_DIR/test/probe/service-probe.qml" > "$log" 2>&1
+  echo "$?" > "$OUT_DIR/$label.exit"
+  echo "$log"
+}
+
+json_line() { grep -o 'PROBE_RESULT .*' "$1" | tail -n1 | sed 's/^PROBE_RESULT //'; }
+
+field() {
+  node -e '
+    try {
+      const data = JSON.parse(process.argv[1]);
+      const v = data[process.argv[2]];
+      process.stdout.write(v === undefined || v === null ? "" : String(v));
+    } catch (e) { process.stdout.write(""); }
+  ' "$1" "$2"
+}
+
+# A dead-but-unreaped mock lingers as zombie "Z" where no init reaps it --
+# state is what counts, not kill -0.
+alive() {
+  local pid="$1" state
+  state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)" || return 1
+  [[ -n "$state" && "$state" != "Z" && "$state" != "X" ]]
+}
+settled_alive() {
+  local pid="$1" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    alive "$pid" || return 1
+    sleep 0.2
+  done
+  return 0
+}
+
+check_no_orphans() {
+  local mocklog="$1" label="$2"
+  local pids leaked=0
+  pids="$(grep -oP '^PID=\K[0-9]+' "$mocklog" 2>/dev/null | sort -u)"
+  for pid in $pids; do
+    if settled_alive "$pid"; then
+      leaked=1
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 0.2
+      alive "$pid" && kill -9 "$pid" 2>/dev/null || true
+      echo "  orphan: PID $pid was still alive after qs exited (killed by test/probe/run)"
+    fi
+  done
+  if [[ $leaked -eq 1 ]]; then
+    not_ok "$label: no orphaned mock process left behind"
+  else
+    ok "$label: no orphaned mock process left behind"
+  fi
+}
+
+check_exit_status() {
+  local label="$1" code
+  code="$(cat "$OUT_DIR/$label.exit" 2>/dev/null || echo "")"
+  [[ "$code" == "0" ]] && ok "$label: qs exited 0 (not a crash/timeout, got $code)" \
+    || not_ok "$label: qs exited 0 (not a crash/timeout, got exit code: ${code:-unknown})"
+}
+
+# A missing stub/engine error prints TypeError/ReferenceError, or a QML load
+# failure prints "ERROR:" -- match the colon so driver noise (VK_ERROR_...)
+# doesn't count.
+check_no_engine_errors() {
+  local log="$1" label="$2"
+  local count
+  count="$(grep -c 'TypeError\|ReferenceError\|ERROR:' "$log" 2>/dev/null)"
+  if [[ "${count:-0}" -eq 0 ]]; then
+    ok "$label: 0 TypeError/ReferenceError/QML load ERROR in the log"
+  else
+    not_ok "$label: 0 TypeError/ReferenceError/QML load ERROR in the log (got $count)"
+    grep 'TypeError\|ReferenceError\|ERROR:' "$log" | head -5 | sed 's/^/    /'
+  fi
+}
+
+MOCK_PATH="$MOCKS/gh"
+
+echo "== ok mode (loading -> ok; counts match fixtures; ETag round-trip on 2nd poll) =="
+log="$(run_scenario ok GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=etag-roundtrip PATH="/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/ok.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "ok: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "ok: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "ok: status=ok" || not_ok "ok: status=ok (got: $(field "$json" status))"
+  [[ "$(field "$json" openPRsLength)" == "1" ]] && ok "ok: openPRs.length===1" || not_ok "ok: openPRs.length===1 (got $(field "$json" openPRsLength))"
+  [[ "$(field "$json" myIssuesLength)" == "4" ]] && ok "ok: myIssues.length===4 (focus filter drops the UNSUBSCRIBED one)" \
+    || not_ok "ok: myIssues.length===4 (got $(field "$json" myIssuesLength))"
+  [[ "$(field "$json" reposLength)" == "7" ]] && ok "ok: repos.length===7" || not_ok "ok: repos.length===7 (got $(field "$json" reposLength))"
+  [[ "$(field "$json" reviewRequestsLength)" == "0" ]] && ok "ok: reviewRequests.length===0" \
+    || not_ok "ok: reviewRequests.length===0 (got $(field "$json" reviewRequestsLength))"
+  [[ "$(field "$json" note)" == "" ]] && ok "ok: no harness-level note/timeout" || not_ok "ok: no harness-level note/timeout (got: $(field "$json" note))"
+  etag_sent="$(grep -c 'If-None-Match: "mock-etag-v1"' "$mocklog" 2>/dev/null)"
+  [[ "${etag_sent:-0}" -ge 1 ]] && ok "ok: ETag captured and sent on the second notifications poll" \
+    || not_ok "ok: ETag captured and sent on the second notifications poll (mock log had no If-None-Match)"
+fi
+check_no_orphans "$mocklog" "ok"
+check_exit_status "ok"
+check_no_engine_errors "$log" "ok"
+
+echo
+echo "== unauthenticated -> recovery (the historical deadlock class) =="
+mode_file="$OUT_DIR/unauth.mode"
+log="$(run_scenario unauth GH_MOCK_MODE=unauthenticated GH_MOCK_MODE_FILE="$mode_file" \
+  GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=unauth-recover GHS_MODE_FILE="$mode_file" PATH="/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/unauth.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "unauth: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "unauth: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "unauth: recovered to status=ok after the mock flipped to ok" \
+    || not_ok "unauth: recovered to status=ok after the mock flipped to ok (got: $(field "$json" status))"
+fi
+check_no_orphans "$mocklog" "unauth"
+check_exit_status "unauth"
+check_no_engine_errors "$log" "unauth"
+
+echo
+echo "== no-gh (ghPath empty) -> recovery when the mock appears on PATH =="
+# `bash -lc` is a LOGIN shell -- it re-derives PATH from shell startup files
+# regardless of the inherited PATH, so a real mise-activated ~/.bashrc would
+# still find the real gh shim. An empty HOME with no rc files is what
+# actually makes `command -v gh` see nothing (verified live on this box).
+linkdir="$OUT_DIR/no-gh-link"
+emptyhome="$OUT_DIR/no-gh-home"
+mkdir -p "$linkdir" "$emptyhome"
+log="$(run_scenario no-gh GHS_SCENARIO=no-gh-recover GHS_LINK_PATH="$linkdir/gh" GHS_MOCK_PATH="$MOCK_PATH" \
+  HOME="$emptyhome" PATH="$linkdir:/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/no-gh.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "no-gh: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "no-gh: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "no-gh: recovered to status=ok once the mock appeared on PATH" \
+    || not_ok "no-gh: recovered to status=ok once the mock appeared on PATH (got: $(field "$json" status))"
+  ghpath="$(field "$json" ghPath)"
+  [[ "$ghpath" == "$linkdir/gh" ]] && ok "no-gh: ghPath resolved to the newly-appeared mock ($ghpath)" \
+    || not_ok "no-gh: ghPath resolved to the newly-appeared mock (got: $ghpath)"
+fi
+check_no_orphans "$mocklog" "no-gh"
+check_exit_status "no-gh"
+check_no_engine_errors "$log" "no-gh"
+
+echo
+echo "== removed-mid-session: mock deleted after ok -> no-gh -> recreated -> recovery =="
+linkdir2="$OUT_DIR/removed-link"
+mkdir -p "$linkdir2"
+ln -sfn "$MOCK_PATH" "$linkdir2/gh"
+log="$(run_scenario removed GH_MOCK_MODE=ok GHS_GHPATH="$linkdir2/gh" GHS_SCENARIO=removed-recover \
+  GHS_LINK_PATH="$linkdir2/gh" GHS_MOCK_PATH="$MOCK_PATH" PATH="$linkdir2:/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/removed.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "removed: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "removed: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "removed: recovered to status=ok once the mock was recreated" \
+    || not_ok "removed: recovered to status=ok once the mock was recreated (got: $(field "$json" status))"
+  fsc="$(field "$json" _dashboardFailedStartCount)"
+  [[ "${fsc:-0}" -ge 1 || "$(field "$json" _notificationsFailedStartCount)" -ge 1 ]] \
+    && ok "removed: a failed-start (missing binary) was actually observed" \
+    || not_ok "removed: a failed-start (missing binary) was actually observed (dashboard=$fsc)"
+fi
+check_no_orphans "$mocklog" "removed"
+check_exit_status "removed"
+check_no_engine_errors "$log" "removed"
+
+echo
+echo "== offline =="
+log="$(run_scenario offline GH_MOCK_MODE=offline GHS_GHPATH="$MOCK_PATH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/offline.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "offline: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "offline: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "offline" ]] && ok "offline: status=offline" || not_ok "offline: status=offline (got: $(field "$json" status))"
+fi
+check_no_orphans "$mocklog" "offline"
+check_exit_status "offline"
+check_no_engine_errors "$log" "offline"
+
+echo
+echo "== rate-limited (reset header -> rateLimitedUntil, resume after the shortened window) =="
+reset_epoch=$(( $(date +%s) + 2 ))
+log="$(run_scenario rate-limited GH_MOCK_MODE=rate-limited GH_MOCK_RATE_RESET_EPOCH="$reset_epoch" \
+  GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=rate-limited-resume)"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/rate-limited.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "rate-limited: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "rate-limited: probe printed a PROBE_RESULT line"
+  rlu="$(field "$json" rateLimitedUntil)"
+  [[ -n "$rlu" ]] && ok "rate-limited: rateLimitedUntil populated from the reset header ($rlu)" \
+    || not_ok "rate-limited: rateLimitedUntil populated from the reset header"
+  # dashboard/probe failures have no reset header in real `gh` output either
+  # (only notifications' -i output does) -- they fall back to a fixed
+  # +60min window, so only notifications is expected to resume this fast.
+  [[ "$(field "$json" notifStatus)" == "ok" ]] && ok "rate-limited: notifications resumed to ok after its reset window passed" \
+    || not_ok "rate-limited: notifications resumed to ok after its reset window passed (got: $(field "$json" notifStatus))"
+fi
+check_no_orphans "$mocklog" "rate-limited"
+check_exit_status "rate-limited"
+check_no_engine_errors "$log" "rate-limited"
+
+echo
+echo "== hang: watchdog fires within the shortened deadline; no orphan =="
+start_ts=$(date +%s)
+log="$(run_scenario hang GH_MOCK_MODE=hang GHS_GHPATH="$MOCK_PATH")"
+end_ts=$(date +%s)
+elapsed=$((end_ts - start_ts))
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/hang.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "hang: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "hang: probe printed a PROBE_RESULT line"
+  fired="$(field "$json" _probeWatchdogFiredCount)"
+  [[ "${fired:-0}" -ge 1 ]] && ok "hang: probe watchdog fired ($fired)" || not_ok "hang: probe watchdog fired (got $fired)"
+  [[ "$elapsed" -le 10 ]] && ok "hang: mock brought down promptly, not left hanging (${elapsed}s)" \
+    || not_ok "hang: mock brought down promptly, not left hanging (took ${elapsed}s)"
+fi
+check_no_orphans "$mocklog" "hang"
+check_exit_status "hang"
+check_no_engine_errors "$log" "hang"
+
+echo
+echo "== flood: output cap TERMs the child; chars stay bounded =="
+log="$(run_scenario flood GH_MOCK_MODE=flood GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=flood)"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/flood.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "flood: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "flood: probe printed a PROBE_RESULT line"
+  overflow="$(field "$json" _dashboardOverflowCount)"
+  [[ "${overflow:-0}" -ge 1 ]] && ok "flood: dashboardOverflowCount >= 1 ($overflow)" \
+    || not_ok "flood: dashboardOverflowCount >= 1 (got $overflow)"
+fi
+check_no_orphans "$mocklog" "flood"
+check_exit_status "flood"
+check_no_engine_errors "$log" "flood"
+
+echo
+echo "== partial (C2): some GraphQL sections null + errors -> keep parsed, dashboardPartial=true =="
+log="$(run_scenario partial GH_MOCK_MODE=partial GHS_GHPATH="$MOCK_PATH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/partial.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "partial: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "partial: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" dashboardPartial)" == "true" ]] && ok "partial: dashboardPartial=true" \
+    || not_ok "partial: dashboardPartial=true (got: $(field "$json" dashboardPartial))"
+  [[ "$(field "$json" openPRsLength)" == "1" ]] && ok "partial: openPRs still parsed (1)" \
+    || not_ok "partial: openPRs still parsed (got $(field "$json" openPRsLength))"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "partial: status=ok (partial success is still success)" \
+    || not_ok "partial: status=ok (got: $(field "$json" status))"
+fi
+check_no_orphans "$mocklog" "partial"
+check_exit_status "partial"
+check_no_engine_errors "$log" "partial"
+
+echo
+echo "== notif-garbage (C4): exit-0 but not a 200+array body -> failure, keep last-good =="
+log="$(run_scenario notif-garbage GH_MOCK_MODE=notif-garbage GHS_GHPATH="$MOCK_PATH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/notif-garbage.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "notif-garbage: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "notif-garbage: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" unreadCount)" == "0" ]] && ok "notif-garbage: unreadCount stayed 0 (no data ever applied)" \
+    || not_ok "notif-garbage: unreadCount stayed 0 (got $(field "$json" unreadCount))"
+  [[ "$(field "$json" status)" == "offline" ]] && ok "notif-garbage: status=offline (dashboard ok, notifications failed)" \
+    || not_ok "notif-garbage: status=offline (got: $(field "$json" status))"
+fi
+check_no_orphans "$mocklog" "notif-garbage"
+check_exit_status "notif-garbage"
+check_no_engine_errors "$log" "notif-garbage"
+
+echo
+echo "-- stale ordering (two pollers write disjoint data) -- not applicable, no scenario invented --"
+
+echo
+if [[ "$fail_count" -eq 0 ]]; then
+  echo "test/probe/run: ALL CHECKS PASSED ($pass_count ok)"
+else
+  echo "test/probe/run: $fail_count FAILURE(S), $pass_count ok"
+fi
+exit $(( fail_count > 0 ? 1 : 0 ))

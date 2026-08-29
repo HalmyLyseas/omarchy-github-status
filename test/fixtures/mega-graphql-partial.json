@@ -1,0 +1,309 @@
+{
+  "data": {
+    "viewer": {
+      "login": "HalmyLyseas",
+      "openPRs": {
+        "totalCount": 1,
+        "nodes": [
+          {
+            "title": "Add Nujabes theme",
+            "url": "https://github.com/omacom/omarchy-site/pull/77",
+            "number": 77,
+            "updatedAt": "2026-08-27T11:43:56Z",
+            "isDraft": false,
+            "reviewDecision": null,
+            "repository": {
+              "nameWithOwner": "omacom/omarchy-site"
+            },
+            "commits": {
+              "nodes": [
+                {
+                  "commit": {
+                    "statusCheckRollup": null
+                  }
+                }
+              ]
+            },
+            "comments": {
+              "nodes": []
+            }
+          }
+        ]
+      },
+      "myIssues": {
+        "totalCount": 5,
+        "nodes": [
+          {
+            "title": "[Plugin]: Ristretto",
+            "url": "https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2672",
+            "number": 2672,
+            "updatedAt": "2026-08-27T05:36:20Z",
+            "viewerSubscription": "SUBSCRIBED",
+            "repository": {
+              "nameWithOwner": "HANCORE-linux/omarchy-plugin-marketplace"
+            },
+            "comments": {
+              "nodes": [
+                {
+                  "author": {
+                    "login": "HalmyLyseas"
+                  },
+                  "updatedAt": "2026-08-27T21:47:43Z"
+                }
+              ]
+            }
+          },
+          {
+            "title": "[Theme] Nujabes",
+            "url": "https://github.com/limehawk/omarchy-theme-website/issues/117",
+            "number": 117,
+            "updatedAt": "2026-08-26T16:46:16Z",
+            "viewerSubscription": "SUBSCRIBED",
+            "repository": {
+              "nameWithOwner": "limehawk/omarchy-theme-website"
+            },
+            "comments": {
+              "nodes": []
+            }
+          },
+          {
+            "title": "[BUG] Safety classifier false positive: Cyrillic transliteration table in game-decompilation work triggers model auto-switch (Fable 5 \u2192 Opus)",
+            "url": "https://github.com/anthropics/claude-code/issues/84820",
+            "number": 84820,
+            "updatedAt": "2026-08-24T22:09:11Z",
+            "viewerSubscription": "SUBSCRIBED",
+            "repository": {
+              "nameWithOwner": "anthropics/claude-code"
+            },
+            "comments": {
+              "nodes": []
+            }
+          },
+          {
+            "title": "Vandal Hearts (PSX) - Decomp and PC Port",
+            "url": "https://github.com/Sebastrion/awesome-unofficial-pc-ports/issues/11",
+            "number": 11,
+            "updatedAt": "2026-08-09T17:59:00Z",
+            "viewerSubscription": "SUBSCRIBED",
+            "repository": {
+              "nameWithOwner": "Sebastrion/awesome-unofficial-pc-ports"
+            },
+            "comments": {
+              "nodes": [
+                {
+                  "author": {
+                    "login": "HalmyLyseas"
+                  },
+                  "updatedAt": "2026-08-09T17:59:00Z"
+                }
+              ]
+            }
+          },
+          {
+            "title": "Clair Obscur: Expedition 33 (1903340)",
+            "url": "https://github.com/ValveSoftware/Proton/issues/8626",
+            "number": 8626,
+            "updatedAt": "2026-05-08T20:42:19Z",
+            "viewerSubscription": "UNSUBSCRIBED",
+            "repository": {
+              "nameWithOwner": "ValveSoftware/Proton"
+            },
+            "comments": {
+              "nodes": [
+                {
+                  "author": {
+                    "login": "neidlosEnte7"
+                  },
+                  "updatedAt": "2026-05-08T20:42:19Z"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "repositories": {
+        "totalCount": 7,
+        "nodes": [
+          {
+            "name": "omarchy-site",
+            "pushedAt": "2026-08-27T11:43:55Z",
+            "isPrivate": false,
+            "isArchived": false,
+            "isFork": true,
+            "stargazerCount": 0,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": null,
+            "defaultBranchRef": {
+              "target": {
+                "oid": "4fde73479684f9f99aed68aaaaa6807ab12ddbae",
+                "messageHeadline": "Fix jdx Twitter link to @jdxcode (#73)",
+                "committedDate": "2026-08-26T15:42:05Z",
+                "statusCheckRollup": null
+              }
+            }
+          },
+          {
+            "name": "omarchy-ristretto",
+            "pushedAt": "2026-08-27T05:28:13Z",
+            "isPrivate": false,
+            "isArchived": false,
+            "isFork": false,
+            "stargazerCount": 1,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": null,
+            "defaultBranchRef": {
+              "target": {
+                "oid": "2dff2b1db25032c103d13ec1c84c290e1f47ccfd",
+                "messageHeadline": "plugin: 1.0.2 -- origin is decided at the lock edge, not inferred fro\u2026",
+                "committedDate": "2026-08-27T05:28:12Z",
+                "statusCheckRollup": null
+              }
+            }
+          },
+          {
+            "name": "omarchy-nujabes-theme",
+            "pushedAt": "2026-08-26T17:44:53Z",
+            "isPrivate": false,
+            "isArchived": false,
+            "isFork": false,
+            "stargazerCount": 0,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": null,
+            "defaultBranchRef": {
+              "target": {
+                "oid": "255b298d05db1ca186d8f0470d00d30356966774",
+                "messageHeadline": "README: note how to remove the Typora stylesheet",
+                "committedDate": "2026-08-26T17:44:51Z",
+                "statusCheckRollup": null
+              }
+            }
+          },
+          {
+            "name": "VandalHearts-PcPort",
+            "pushedAt": "2026-08-23T07:05:25Z",
+            "isPrivate": false,
+            "isArchived": false,
+            "isFork": false,
+            "stargazerCount": 25,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": {
+              "tagName": "v2.0.0",
+              "name": "v2.0.0 \u2014 Vandal Hearts PC Port",
+              "publishedAt": "2026-08-22T15:20:42Z",
+              "url": "https://github.com/HalmyLyseas/VandalHearts-PcPort/releases/tag/v2.0.0"
+            },
+            "defaultBranchRef": {
+              "target": {
+                "oid": "d459505c5f6e9d150924cbc7185a31bab65ce64a",
+                "messageHeadline": "gitignore: ignore platform/pc/timing_runs/",
+                "committedDate": "2026-08-23T07:00:27Z",
+                "statusCheckRollup": null
+              }
+            }
+          },
+          {
+            "name": "VandalHearts-decomp-SLPM-86007",
+            "pushedAt": "2026-08-16T06:59:09Z",
+            "isPrivate": false,
+            "isArchived": true,
+            "isFork": false,
+            "stargazerCount": 0,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": {
+              "tagName": "v1.0.0",
+              "name": "v1.0.0 \u2014 decompilation complete",
+              "publishedAt": "2026-08-16T06:59:31Z",
+              "url": "https://github.com/HalmyLyseas/VandalHearts-decomp-SLPM-86007/releases/tag/v1.0.0"
+            },
+            "defaultBranchRef": {
+              "target": {
+                "oid": "75017596cc439a7141e405943afdb469b717787c",
+                "messageHeadline": "Vandal Hearts (Japan, SLPM-86007) \u2014 matching decompilation",
+                "committedDate": "2026-08-16T06:55:32Z",
+                "statusCheckRollup": null
+              }
+            }
+          },
+          {
+            "name": "quiver-community-app-catalog",
+            "pushedAt": "2026-08-15T22:39:34Z",
+            "isPrivate": false,
+            "isArchived": false,
+            "isFork": true,
+            "stargazerCount": 0,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": null,
+            "defaultBranchRef": {
+              "target": {
+                "oid": "4d18ed36257aef5a46aedfc5cc42f0bfb974000a",
+                "messageHeadline": "Add Silent Hill: Downpour entry to Xbox.json",
+                "committedDate": "2026-08-13T12:31:59Z",
+                "statusCheckRollup": null
+              }
+            }
+          },
+          {
+            "name": "fe3h-companionApp",
+            "pushedAt": "2026-07-24T09:18:45Z",
+            "isPrivate": false,
+            "isArchived": false,
+            "isFork": false,
+            "stargazerCount": 0,
+            "openIssues": {
+              "totalCount": 0
+            },
+            "openPRCount": {
+              "totalCount": 0
+            },
+            "latestRelease": null,
+            "defaultBranchRef": {
+              "target": {
+                "oid": "f9b6ce41361a3531880561fa8b76d0e10d3b38ef",
+                "messageHeadline": "license: restore verbatim GPLv2 text so GitHub detects GPL-2.0",
+                "committedDate": "2026-07-24T09:18:43Z",
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "errors": [
+    {
+      "message": "Something went wrong while executing your query. Please include `X-abc` when reporting this issue."
+    }
+  ]
+}

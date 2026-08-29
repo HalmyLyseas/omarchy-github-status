@@ -1,37 +1,89 @@
 #!/usr/bin/env bash
-# test/mocks/gh -- PATH-shadowing mock of the `gh` CLI for script tests.
-#
-# Serves canned fixture responses based on argv, mimicking the exact shapes
-# observed against the real API (exchange/04-github-data.md, cross-checked
-# live again while building this mock -- see exchange/07-s1-scaffold.md).
-#
-# Behavior is steered by $GH_MOCK_MODE (default "ok"):
-#   ok        -- everything succeeds, `gh api user --jq .login` -> "HalmyLyseas"
-#   unauth    -- `gh api user` fails like a real HTTP 401 / "Bad credentials"
-#   offline   -- `gh api user` fails like a real unreachable-network error
-#
-# Fixture directory is resolved relative to this script's own location so it
-# works regardless of the caller's cwd.
-set -euo pipefail
+# test/mocks/gh -- PATH/absolute-path-shadowing mock of the `gh` CLI, driven
+# entirely by argv (Service.qml's G2 native rework spawns `gh` as a direct
+# Process child, never through a script). GH_MOCK_MODE picks the behavior;
+# GH_MOCK_MODE_FILE, when set and non-empty, overrides it per-invocation so
+# a running probe can flip mode mid-session (recovery scenarios). GH_MOCK_LOG
+# records one line per invocation (pid/mode/argv) for orphan checks and for
+# asserting the ETag actually sent on a later notifications call.
+set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 FIXTURES="$SCRIPT_DIR/../fixtures"
 MODE="${GH_MOCK_MODE:-ok}"
+if [[ -n "${GH_MOCK_MODE_FILE:-}" && -s "$GH_MOCK_MODE_FILE" ]]; then
+  MODE="$(cat "$GH_MOCK_MODE_FILE")"
+fi
+RESET_EPOCH="${GH_MOCK_RATE_RESET_EPOCH:-$(($(date +%s) + 3600))}"
+# Once the reset time has actually passed, behave like "ok" -- a real rate
+# limit window resets on its own, it doesn't stay tripped forever.
+[[ "$MODE" == "rate-limited" && $(date +%s) -ge "$RESET_EPOCH" ]] && MODE="ok"
 
-# --- gh api user --jq .login (probe-auth) ----------------------------------
+if [[ -n "${GH_MOCK_LOG:-}" ]]; then
+  if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
+    echo "PID=$$ MODE=$MODE ARGV: api graphql -f query=<${#4} chars>" >> "$GH_MOCK_LOG"
+  else
+    echo "PID=$$ MODE=$MODE ARGV: $*" >> "$GH_MOCK_LOG"
+  fi
+fi
+
+[[ "$MODE" == "hang" ]] && exec sleep 600
+
+# --- gh api user --jq .login (probe) ----------------------------------------
 if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
   case "$MODE" in
-    unauth)
-      echo '{"message": "Bad credentials","documentation_url": "https://docs.github.com/rest","status": "401"}'
+    unauthenticated)
       echo "gh: Bad credentials (HTTP 401)" >&2
       exit 1
       ;;
+    rate-limited)
+      echo "gh: API rate limit exceeded for user ID 1234. (HTTP 403)" >&2
+      exit 1
+      ;;
     offline)
-      echo 'Get "https://api.github.com/user": dial tcp 127.0.0.1:1: connect: connection refused' >&2
+      echo 'gh: Get "https://api.github.com/user": dial tcp 127.0.0.1:1: connect: connection refused' >&2
+      exit 1
+      ;;
+    fail)
+      echo "gh: mock generic failure" >&2
       exit 1
       ;;
     *)
       echo "HalmyLyseas"
+      exit 0
+      ;;
+  esac
+fi
+
+# --- gh api graphql -f query=... (dashboard) --------------------------------
+if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
+  case "$MODE" in
+    unauthenticated)
+      echo "gh: Bad credentials (HTTP 401)" >&2
+      exit 1
+      ;;
+    rate-limited)
+      echo "gh: API rate limit exceeded for user ID 1234. (HTTP 403)" >&2
+      exit 1
+      ;;
+    offline)
+      echo 'gh: Post "https://api.github.com/graphql": dial tcp 127.0.0.1:1: connect: connection refused' >&2
+      exit 1
+      ;;
+    fail)
+      echo "gh: mock generic failure" >&2
+      exit 1
+      ;;
+    partial)
+      cat "$FIXTURES/mega-graphql-partial.json"
+      exit 0
+      ;;
+    flood)
+      pad="$(head -c 200 /dev/zero | tr '\0' 'x')"
+      while true; do printf '{"pad":"%s"}\n' "$pad"; done
+      ;;
+    *)
+      cat "$FIXTURES/mega-graphql.json"
       exit 0
       ;;
   esac
@@ -44,37 +96,57 @@ if [[ "${1:-}" == "api" && "${2:-}" == "-i" && "${3:-}" == "notifications" ]]; t
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -H)
-        if [[ "${2:-}" == If-None-Match:* ]]; then
-          if_none_match="${2#If-None-Match: }"
-        fi
+        [[ "${2:-}" == If-None-Match:* ]] && if_none_match="${2#If-None-Match: }"
         shift 2
         ;;
-      *)
-        shift
-        ;;
+      *) shift ;;
     esac
   done
 
-  if [[ -n "$if_none_match" && "$if_none_match" == '"mock-etag-v1"' ]]; then
-    cat "$FIXTURES/notifications-i-304.txt"
-    echo "gh: HTTP 304" >&2
-    exit 1
-  fi
-
-  cat "$FIXTURES/notifications-i-200.txt"
-  exit 0
-fi
-
-# --- gh api graphql -F query=@- ---------------------------------------------
-if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
-  # Consume stdin (the query text) so the caller's heredoc pipe doesn't hang.
-  # Normally the mock doesn't need its contents to serve a canned fixture, but
-  # when MOCK_GH_GRAPHQL_QUERY_FILE is set (test-only), capture the query text
-  # there instead of discarding it, so a caller can assert on what was
-  # actually sent -- not just the calling script's source text.
-  cat > "${MOCK_GH_GRAPHQL_QUERY_FILE:-/dev/null}"
-  cat "$FIXTURES/mega-graphql.json"
-  exit 0
+  case "$MODE" in
+    unauthenticated)
+      echo "gh: Bad credentials (HTTP 401)" >&2
+      exit 1
+      ;;
+    rate-limited)
+      {
+        echo "HTTP/2.0 403 Forbidden"
+        echo "X-Ratelimit-Limit: 5000"
+        echo "X-Ratelimit-Remaining: 0"
+        echo "X-Ratelimit-Reset: $RESET_EPOCH"
+        echo
+        echo '{"message":"API rate limit exceeded"}'
+      }
+      echo "gh: API rate limit exceeded for user ID 1234. (HTTP 403)" >&2
+      exit 1
+      ;;
+    offline)
+      echo 'gh: Get "https://api.github.com/notifications": dial tcp 127.0.0.1:1: connect: connection refused' >&2
+      exit 1
+      ;;
+    fail)
+      echo "gh: mock generic failure" >&2
+      exit 1
+      ;;
+    notif-garbage)
+      cat "$FIXTURES/notifications-i-garbage.txt"
+      exit 0
+      ;;
+    http-304)
+      cat "$FIXTURES/notifications-i-304.txt"
+      echo "gh: HTTP 304" >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "$if_none_match" && "$if_none_match" == '"mock-etag-v1"' ]]; then
+        cat "$FIXTURES/notifications-i-304.txt"
+        echo "gh: HTTP 304" >&2
+        exit 1
+      fi
+      cat "$FIXTURES/notifications-i-200.txt"
+      exit 0
+      ;;
+  esac
 fi
 
 echo "gh mock: unhandled invocation: $*" >&2

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# test/all -- runs every test suite in this repo. Exits non-zero if any
-# suite fails.
+# test/all -- runs every test suite in this repo: Node unit tests over
+# Model.js, then test/probe/run (the mock-gh service probe suite driving
+# the real Service.qml). Exits non-zero if any suite fails.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,6 +9,11 @@ overall=0
 
 echo "== Model.js (node) =="
 node "$SCRIPT_DIR/model.test.js"
+if [[ $? -ne 0 ]]; then overall=1; fi
+
+echo
+echo "== test/probe/run (mock-gh service probe suite) =="
+bash "$SCRIPT_DIR/probe/run"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo
