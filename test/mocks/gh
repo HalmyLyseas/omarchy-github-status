@@ -42,6 +42,11 @@ if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
       echo "gh: Bad credentials (HTTP 401)" >&2
       exit 1
       ;;
+    unauthenticated-fresh)
+      echo "To get started with GitHub CLI, please run:  gh auth login" >&2
+      echo "Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token." >&2
+      exit 4
+      ;;
     rate-limited)
       echo "gh: API rate limit exceeded for user ID 1234. (HTTP 403)" >&2
       exit 1
@@ -68,6 +73,11 @@ if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
       echo "gh: Bad credentials (HTTP 401)" >&2
       exit 1
       ;;
+    unauthenticated-fresh)
+      echo "To get started with GitHub CLI, please run:  gh auth login" >&2
+      echo "Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token." >&2
+      exit 4
+      ;;
     rate-limited)
       echo "gh: API rate limit exceeded for user ID 1234. (HTTP 403)" >&2
       exit 1
@@ -82,7 +92,8 @@ if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
       ;;
     partial)
       cat "$FIXTURES/mega-graphql-partial.json"
-      exit 0
+      echo "gh: Something went wrong while executing your query. Please include \`X-abc\` when reporting this issue." >&2
+      exit 1
       ;;
     flood)
       pad="$(head -c 200 /dev/zero | tr '\0' 'x')"
@@ -113,6 +124,11 @@ if [[ "${1:-}" == "api" && "${2:-}" == "-i" && "${3:-}" == "notifications" ]]; t
     unauthenticated)
       echo "gh: Bad credentials (HTTP 401)" >&2
       exit 1
+      ;;
+    unauthenticated-fresh)
+      echo "To get started with GitHub CLI, please run:  gh auth login" >&2
+      echo "Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token." >&2
+      exit 4
       ;;
     rate-limited)
       {

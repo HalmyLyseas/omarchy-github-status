@@ -390,23 +390,37 @@ function mapDashboard(json) {
   var viewer = isObject(data.viewer) ? data.viewer : null
   var login = viewer ? safeStr(viewer.login, "") : ""
   result.login = login
-  if (viewer && isObject(viewer.openPRs)) {
+  // A connection only counts as resolved when `nodes` is an array -- a
+  // malformed/missing `nodes` is unparsed, not "empty", so the section
+  // stays null (don't replace last-good data with a false empty list).
+  if (viewer && isObject(viewer.openPRs) && isArray(viewer.openPRs.nodes)) {
     result.openPRs = mapOpenPRs(login, viewer.openPRs.nodes)
     result.openPRsTotal = safeNum(viewer.openPRs.totalCount, 0)
   }
-  if (viewer && isObject(viewer.repositories)) {
+  if (viewer && isObject(viewer.repositories) && isArray(viewer.repositories.nodes)) {
     result.repos = mapRepos(login, viewer.repositories.nodes)
     result.reposTotal = safeNum(viewer.repositories.totalCount, 0)
   }
-  if (viewer && isObject(viewer.myIssues)) {
+  if (viewer && isObject(viewer.myIssues) && isArray(viewer.myIssues.nodes)) {
     result.myIssues = mapMyIssues(login, viewer.myIssues.nodes)
     result.myIssuesTotal = safeNum(viewer.myIssues.totalCount, 0)
   }
-  if (isObject(data.reviewRequests)) {
+  if (isObject(data.reviewRequests) && isArray(data.reviewRequests.nodes)) {
     result.reviewRequests = mapReviewRequests(login, data.reviewRequests.nodes)
     result.reviewRequestsTotal = safeNum(data.reviewRequests.issueCount, 0)
   }
   return result
+}
+
+// The oldest of two "last synced" epoch-ms values, so "Synced X ago" is a
+// lower bound on every section's freshness. 0 means "never synced"; a
+// single synced source reports itself.
+function oldestSync(a, b) {
+  var av = safeNum(a, 0)
+  var bv = safeNum(b, 0)
+  if (av <= 0) return bv
+  if (bv <= 0) return av
+  return Math.min(av, bv)
 }
 
 // `repositories.nodes[].name` in the query is a bare repo name (no owner),
@@ -475,7 +489,8 @@ function classifyFailure(stderrText, exitCode) {
   if (/HTTP 304/i.test(text)) {
     return "http-304"
   }
-  if (/HTTP 401/i.test(text) || /bad credentials/i.test(text)) {
+  if (exitCode === 4 || /HTTP 401/i.test(text) || /bad credentials/i.test(text)
+      || /please run:\s+gh auth login/i.test(text)) {
     return "unauthenticated"
   }
   if (/API rate limit exceeded/i.test(text) || (/HTTP 403/i.test(text) && /rate.?limit/i.test(text))) {
@@ -706,6 +721,7 @@ if (typeof module !== "undefined" && module.exports) {
     QUERY_CAP: QUERY_CAP,
     SUPPORTED_GH_MAJORS: SUPPORTED_GH_MAJORS,
     parseGhVersion: parseGhVersion,
-    isGhVersionSupported: isGhVersionSupported
+    isGhVersionSupported: isGhVersionSupported,
+    oldestSync: oldestSync
   }
 }

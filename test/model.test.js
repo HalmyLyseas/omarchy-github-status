@@ -516,7 +516,7 @@ test("mapDashboard: adversarial huge node arrays get capped (PRs 20, reviewReque
   assert.strictEqual(mapped.myIssues.length, 20)
 })
 
-test("mapDashboard: tolerates non-array `nodes` fields", function () {
+test("mapDashboard: a non-array `nodes` field leaves that section null (unparsed), never a false empty list", function () {
   var mapped = Model.mapDashboard({
     data: {
       viewer: { openPRs: { nodes: "not an array" }, repositories: { nodes: null }, myIssues: { nodes: 7 } },
@@ -524,8 +524,21 @@ test("mapDashboard: tolerates non-array `nodes` fields", function () {
     }
   })
   assert.deepStrictEqual(mapped, {
-    openPRs: [], reviewRequests: [], repos: [], myIssues: [], login: "",
-    openPRsTotal: 0, reviewRequestsTotal: 0, reposTotal: 0, myIssuesTotal: 0
+    openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "",
+    openPRsTotal: null, reviewRequestsTotal: null, reposTotal: null, myIssuesTotal: null
+  })
+})
+
+test("mapDashboard: an object connection with no `nodes` key at all also leaves the section null", function () {
+  var mapped = Model.mapDashboard({
+    data: {
+      viewer: { openPRs: {}, repositories: {}, myIssues: {} },
+      reviewRequests: {}
+    }
+  })
+  assert.deepStrictEqual(mapped, {
+    openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "",
+    openPRsTotal: null, reviewRequestsTotal: null, reposTotal: null, myIssuesTotal: null
   })
 })
 
@@ -923,6 +936,22 @@ test("relativeTime: clock skew (future timestamp) doesn't throw or go negative-l
   assert.strictEqual(Model.relativeTime("2026-08-27T12:05:00Z", now), "just now")
 })
 
+// -------------------------------------------------------------------------- oldestSync
+
+test("oldestSync: the min of two non-zero values", function () {
+  assert.strictEqual(Model.oldestSync(1000, 2000), 1000)
+  assert.strictEqual(Model.oldestSync(2000, 1000), 1000)
+})
+
+test("oldestSync: a single synced source (the other still 0) reports itself", function () {
+  assert.strictEqual(Model.oldestSync(1500, 0), 1500)
+  assert.strictEqual(Model.oldestSync(0, 1500), 1500)
+})
+
+test("oldestSync: both 0 (never synced) stays 0", function () {
+  assert.strictEqual(Model.oldestSync(0, 0), 0)
+})
+
 // -------------------------------------------------------------------- isSafeGithubUrl
 
 test("isSafeGithubUrl: accepts real github.com URLs", function () {
@@ -998,6 +1027,16 @@ test("classifyFailure: unauthenticated (HTTP 401 / Bad credentials)", function (
   var stderr = 'gh: Bad credentials (HTTP 401)'
   assert.strictEqual(Model.classifyFailure(stderr, 1), "unauthenticated")
   assert.strictEqual(Model.classifyFailure("some other text mentioning HTTP 401 only", 1), "unauthenticated")
+})
+
+test("classifyFailure: never-authenticated fresh install (exit 4 / \"please run: gh auth login\")", function () {
+  var stderr = "To get started with GitHub CLI, please run:  gh auth login\n"
+    + "Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token."
+  assert.strictEqual(Model.classifyFailure(stderr, 4), "unauthenticated")
+  // Whitespace-tolerant: real gh prints two spaces before `gh`, but the
+  // classifier must not depend on that exact count.
+  assert.strictEqual(Model.classifyFailure("please run: gh auth login", 4), "unauthenticated")
+  assert.strictEqual(Model.classifyFailure("anything at all", 4), "unauthenticated")
 })
 
 test("classifyFailure: offline (connection-level error, no HTTP status)", function () {

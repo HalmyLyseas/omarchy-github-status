@@ -161,6 +161,24 @@ check_exit_status "unauth"
 check_no_engine_errors "$log" "unauth"
 
 echo
+echo "== never-authenticated (fresh install, exit 4) -> recovery (C2) =="
+mode_file_fresh="$OUT_DIR/unauth-fresh.mode"
+log="$(run_scenario unauth-fresh GH_MOCK_MODE=unauthenticated-fresh GH_MOCK_MODE_FILE="$mode_file_fresh" \
+  GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=unauth-fresh-recover GHS_MODE_FILE="$mode_file_fresh" PATH="/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/unauth-fresh.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "unauth-fresh: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "unauth-fresh: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "unauth-fresh: recovered to status=ok after the mock flipped to ok" \
+    || not_ok "unauth-fresh: recovered to status=ok after the mock flipped to ok (got: $(field "$json" status))"
+fi
+check_no_orphans "$mocklog" "unauth-fresh"
+check_exit_status "unauth-fresh"
+check_no_engine_errors "$log" "unauth-fresh"
+
+echo
 echo "== unauthenticated -> refresh()-driven recovery (re-probe timer left long) =="
 mode_file2="$OUT_DIR/unauth-refresh.mode"
 log="$(run_scenario unauth-refresh GH_MOCK_MODE=unauthenticated GH_MOCK_MODE_FILE="$mode_file2" \
@@ -327,8 +345,8 @@ check_exit_status "partial"
 check_no_engine_errors "$log" "partial"
 
 echo
-echo "== notif-garbage (C4): exit-0 but not a 200+array body -> failure, keep last-good =="
-log="$(run_scenario notif-garbage GH_MOCK_MODE=notif-garbage GHS_GHPATH="$MOCK_PATH")"
+echo "== notif-garbage (C4): exit-0 but not a 200+array body -> failure, keep last-good, ETag not poisoned =="
+log="$(run_scenario notif-garbage GH_MOCK_MODE=notif-garbage GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=etag-roundtrip)"
 json="$(json_line "$log")"
 mocklog="$OUT_DIR/notif-garbage.mock.log"
 if [[ -z "$json" ]]; then
@@ -340,6 +358,12 @@ else
   [[ "$(field "$json" status)" == "offline" ]] && ok "notif-garbage: status=offline (dashboard ok, notifications failed)" \
     || not_ok "notif-garbage: status=offline (got: $(field "$json" status))"
 fi
+# The rejected body's Etag must never be committed -- the refresh()-driven
+# second poll (same etag-roundtrip helper the "ok" scenario uses) must not
+# carry it as If-None-Match.
+poisoned="$(grep -c 'If-None-Match: "mock-etag-garbage"' "$mocklog" 2>/dev/null)"
+[[ "${poisoned:-0}" -eq 0 ]] && ok "notif-garbage: rejected body's ETag never sent as If-None-Match on the next poll" \
+  || not_ok "notif-garbage: rejected body's ETag never sent as If-None-Match on the next poll (mock log had it)"
 check_no_orphans "$mocklog" "notif-garbage"
 check_exit_status "notif-garbage"
 check_no_engine_errors "$log" "notif-garbage"

@@ -104,7 +104,10 @@ poller's own status once it is set.
 legitimate "nothing here") or `null` ("did not resolve, don't replace").
 `handleDashboardExit` reassigns only the sections that came back non-null,
 sets `dashboardPartial` when some (not all) parsed, and only routes to the
-full-failure path when **every** section is null. Each section's real
+full-failure path when **every** section is null. Real `gh` exits 1 on a
+GraphQL `errors` response while stdout still carries the full envelope, so
+a non-zero exit whose stdout parses to an object with an object `data`
+takes this same path. Each section's real
 GraphQL `totalCount`/`issueCount` rides alongside it, `null` exactly when
 that section is — this is what lets `SectionHeader`'s pill read `"N of T"`
 once the real total exceeds the rendered/capped window.
@@ -114,6 +117,10 @@ ETag is refreshed if a new one appears, `lastSyncMs` bumps, but
 `internal.notifications` is deliberately **not** reassigned (no signal
 fires) — the conditional-request contract that makes an unchanged inbox
 cost near-nothing.
+
+`Service.lastSyncMs` (`Model.oldestSync`) is the OLDEST of the two
+sources' own sync markers, not the freshest, so the hero's "Synced X ago"
+is always a lower bound on every section's real freshness.
 
 ## CLI version pin
 

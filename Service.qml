@@ -19,9 +19,10 @@ Item {
 
   // "ok" | "loading" | "no-gh" | "unauthenticated" | "offline" | "rate-limited"
   readonly property string status: computeStatus()
-  // "last time we successfully synced with GitHub" -- bumped by any
-  // source's success, including a notifications 304.
-  readonly property double lastSyncMs: Math.max(internal.dashboardLastSyncMs, internal.notifLastSyncMs)
+  // "last time we successfully synced with GitHub" -- the OLDEST of the
+  // sources that have ever synced, so "Synced X ago" is a lower bound on
+  // every section's freshness, not just whichever source is freshest.
+  readonly property double lastSyncMs: Model.oldestSync(internal.dashboardLastSyncMs, internal.notifLastSyncMs)
   // Per-source sync markers so Panel.qml can gate each SectionHeader's
   // "..."-vs-confirmed-"0" pill on the one source that actually backs it.
   readonly property double dashboardLastSyncMs: internal.dashboardLastSyncMs
@@ -421,6 +422,7 @@ Item {
         root.ghPath = resolved
         log("gh resolved at " + resolved)
         startProbe()
+        internal.ghVersion = ""
         triggerGhVersionCheck()
         return
       }
@@ -797,7 +799,7 @@ Item {
     if (exitCode === 0) {
       var login = String(rawOut || "").replace(/^\s+|\s+$/g, "")
       if (login) internal.login = login
-      log("probe: authenticated" + (login ? " as " + login : ""))
+      log("probe: authenticated")
       onFetchSuccess("probe")
       // Mid-session recovery: a poller that previously recorded
       // no-gh/unauthenticated must not keep blocking forever once a fresh
@@ -935,19 +937,21 @@ Item {
   function _captureLoginFromDashboard(login) {
     if (!login || internal.login) return
     internal.login = login
-    log("login learned opportunistically from dashboard response: " + internal.login)
+    log("login learned opportunistically from dashboard response")
     if (internal.notifications.length > 0) {
       internal.notifications = Model.remapNotificationsExternal(internal.notifications, internal.login)
     }
   }
 
-  // Counts parsed vs. null sections. All parsed -> ok. Some parsed (plus
-  // GraphQL `errors`) -> keep the parsed sections, advance sync time, flag
-  // dashboardPartial, log the errors. None parsed -> failure as before.
+  // Counts parsed vs. null sections: all -> ok, some -> dashboardPartial,
+  // none -> failure. A non-zero exit whose stdout parses to an object
+  // `data` takes this same path (gh exits 1 on partial GraphQL errors).
   function handleDashboardExit(exitCode, rawOut, rawErr) {
-    if (exitCode === 0) {
-      var parsed = null
-      try { parsed = JSON.parse(rawOut) } catch (e) { parsed = null }
+    var parsed = null
+    try { parsed = JSON.parse(rawOut) } catch (e) { parsed = null }
+    var hasDataEnvelope = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      && parsed.data !== null && typeof parsed.data === "object" && !Array.isArray(parsed.data)
+    if (exitCode === 0 || hasDataEnvelope) {
       var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
       var sections = [mapped.openPRs, mapped.reviewRequests, mapped.repos, mapped.myIssues]
       var parsedCount = sections.filter(function (s) { return s !== null }).length
@@ -1054,8 +1058,8 @@ Item {
   function handleNotificationsExit(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
       var parsed = Model.parseHeadersAndBody(rawOut)
-      if (parsed.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed.etag)
       if (Model.isNotificationsBodyValid(parsed)) {
+        if (parsed.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed.etag)
         internal.notifications = Model.mapNotifications(parsed.body, internal.login)
         onFetchSuccess("notifications")
       } else {

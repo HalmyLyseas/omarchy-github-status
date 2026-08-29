@@ -10,12 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
-      # An archlinux:latest container ships pacman but not git; git is not
-      # one of pacman's own dependencies, so install it before checkout can
-      # run (steps execute in the order listed, checkout does not have to
-      # be first).
+      # archlinux:latest ships pacman but not git, so install it before
+      # checkout can run. Full sync+upgrade, never a bare `-Sy` -- a
+      # partial upgrade is Arch's own well-documented way to break a system.
       - name: Install git
-        run: pacman -Sy --noconfirm git
+        run: pacman -Syu --noconfirm git
 
       - uses: actions/checkout@v7
 

@@ -115,7 +115,7 @@ ShellRoot {
     if (scenario === "etag-roundtrip") {
       service.refresh()
       _drainThen(finishNow)
-    } else if (scenario === "unauth-recover") {
+    } else if (scenario === "unauth-recover" || scenario === "unauth-fresh-recover") {
       writeModeFile("ok", function () {
         _waitUntil(4000, function () { return service.status === "ok" }, finishNow)
       })
