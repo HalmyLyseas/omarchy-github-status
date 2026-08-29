@@ -32,13 +32,15 @@ From the bar you can see, at a glance and in one click:
 - **Review requests** — PRs waiting on you, shown ahead of your own PRs
   because someone else is blocked on you.
 - **My open PRs** — title, repo, draft flag, CI rollup, review decision, and
-  relative last-activity age for every open PR you have across every repo
-  you can access, not just one repo at a time.
-- **My open issues** — every issue you yourself opened and is still open,
-  across every repo, with a relative last-activity age. A **Subscribed**
-  toggle chip in the section header (active by default) hides issues you've
+  relative last-activity age, across every repo you can access, not just one
+  repo at a time (a section pill reads "N of T" if you have more open than
+  the section's own display window).
+- **My open issues** — issues you yourself opened and are still open, across
+  every repo, with a relative last-activity age. A **Subscribed** toggle
+  chip in the section header (active by default) hides issues you've
   unsubscribed from, so old clutter you no longer care about doesn't linger
-  in the panel — toggle it off to see every open issue again.
+  in the panel — toggle it off to see every open issue again (same "N of T"
+  pill behaviour as My open PRs above).
 - **Repositories** — your own repos with open issue/PR counts and the latest
   release tag where one exists, most-recently-pushed first.
 - **Search** — a live filter field at the top of the panel. Type anything
@@ -136,9 +138,12 @@ is never touched.
 - **Read-only.** Every GitHub call is a `gh api` GET or a GraphQL `query` —
   never a mutation. This plugin cannot star, comment, merge, close, or
   change anything on your behalf.
-- **No disk cache.** All state lives in memory for the life of the shell
-  session; nothing about your notifications, PRs, or repos is written to
-  disk by this plugin.
+- **No disk cache of GitHub data.** Every notification/PR/issue/repo list
+  lives in memory only, for the life of the shell session, and is refetched
+  from scratch on the next restart. Your settings (refresh intervals, repo
+  limit, issues filter) are persisted through Omarchy's own shell config —
+  the same mechanism every other bar widget's settings use — not a cache
+  this plugin manages itself.
 - **Only github.com opens.** Every clickable item is checked against a
   strict `https://github.com/` prefix before your browser is asked to open
   it, and that open never goes through a shell — no other host or scheme is
@@ -150,10 +155,24 @@ is never touched.
 omarchy plugin remove halmylyseas.github-status
 ```
 
-This disables the plugin and deletes its folder. Since nothing here is
-written to disk in the first place (no disk cache, no settings UI beyond
-Omarchy's own bar-widget form), there's nothing else to clean up — removal
-just stops the bar glyph and its background polling.
+This disables the plugin and deletes its folder. Any settings you changed
+were stored in Omarchy's own shell config and are removed along with the
+plugin's entry; no GitHub data was ever cached to disk in the first place,
+so removal just stops the bar glyph and its background polling.
+
+## Verify
+
+```bash
+bash test/all
+omarchy plugin validate .
+```
+
+`test/all` runs the Node unit tests (`Model.js`, a QML `Text` PlainText-sink
+audit, the comment-hygiene scan), then two `qs -n -p` probe suites: one
+drives the real `Service.qml` through its full status ladder against a
+mock `gh`, the other drives the real `BarWidget.qml`/`Panel.qml` against a
+stub shell/bar. See [`docs/developers.md`](docs/developers.md) "Testing"
+for what each suite proves.
 
 ## License
 

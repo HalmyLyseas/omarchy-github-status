@@ -1,694 +1,213 @@
 # Developer notes
 
-**G2 native rework note:** `scripts/fetch-dashboard`/`fetch-notifications`/
-`probe-auth` are gone — `gh` is now a direct Quickshell `Process` child of
-`Service.qml` (path resolved once via `bash -lc "command -v gh"`, the only
-shell invocation left). The three script rows below and the process-contract
-sections that describe them predate that change; treat `Service.qml` itself
-as the source of truth until this file gets its full rewrite.
-
-**G3 UI note:** `SectionHeader.qml` gained a `total` property (Service's
-`openPRsTotal`/`reviewRequestsTotal`/`reposTotal`/`myIssuesTotal`, sourced
-from GraphQL `totalCount`/`issueCount`) — a section's pill now reads
-`"N of T"` once the real total exceeds what's rendered, `"N"` otherwise;
-Panel suppresses `total` to 0 while a search is active, so the pill always
-shows the filtered count alone then. The repo release-tag pill now elides
-past a fixed width, matching `InlinePill`. The hero meta line and status
-hint both call out `svc.dashboardPartial` (C2). The `## Testing` section
-below predates this too — see its own note.
-
-The distilled why and how of this plugin, for a contributor (or a future
-maintenance session) starting from a bare clone. The README covers using it;
-`CLAUDE.md` carries the project rules and hard constraints. Everything here
-was learned building against a live Omarchy 4.0.1 system,
-usually by reproducing the failure first. The PM workspace's `exchange/`
-numbered docs (present alongside this repo during development, not required
-to build or maintain it) corroborate specific claims below where cited —
-treat them as evidence, not as something a fresh clone needs to have.
+The design record for this plugin, for a contributor starting from a bare
+clone. The README covers using it; `CLAUDE.md` carries the hard rules;
+`docs/threat-model.md` carries the security model.
 
 ## Architecture
 
 | File | Role |
 |---|---|
-| `Service.qml` | The data layer and the only owner of machine-wide state: every `Process`, `Timer`, and piece of mutable data lives here. Loaded once by the shell (`kinds: ["service", ...]`, `keepLoaded: true`). |
-| `BarWidget.qml` | The bar button. Eager-`Loader`-hosted panel, GitHub octicon + count pill. One instance **per monitor** — reads `Service.qml`'s public properties, owns none of its own. |
-| `Panel.qml` | The popup UI: hero, degradation hint, search field (v1.2), five sections (inbox, review requests, open PRs, open issues, repositories — renamed from "repo activity" in v1.3), each independently foldable (v1.2). One instance **per monitor**, same as `BarWidget.qml`. Binds to the service; writes nothing back to it except calling `refresh()`/`openUrl()`/`setIssuesFilter()` (v1.3 H3 dropped `setRepoSort()` along with the sort feature). |
-| `SectionHeader.qml` | v1.1: kit-styled section header (label + right-aligned count/`"…"` pill, optional `extra` slot) shared by all five `Panel.qml` sections; the My open issues header's `extra` slot holds the v1.3 "Subscribed" toggle chip (a single `Button`, replacing v1.2's Focus/All `ButtonGroup`) — the Repositories header's own `extra` slot is empty since v1.3 removed its sort toggle. v1.2 adds `collapsed`/`toggled()` for the click-to-fold header (G3). |
-| `Model.js` | Pure logic, no Quickshell imports, ES5-compatible so plain Node can `require()` it: every `gh` JSON → UI-shape mapping function, the URL allowlist, the failure classifier, field/list caps, (v1.1) `repoPill`/`ownerFromNameWithOwner`/`isExternalOwner`/`mergedSettings`, and (v1.2) `matchesQuery`/`filterIssues`/`lastComment`/`subscribedFromViewerSubscription`. `sortRepos` existed in v1.1–v1.2 and was removed in v1.3 (H3). Fully unit-testable without a running shell. |
-| `scripts/fetch-dashboard` | `bash`: `exec gh api graphql` with the combined query (openPRs + repos + review-requests + v1.1's `myIssues`, each PR/issue/review-request node also carrying v1.2's `comments(last: 1)` and (issues only) `viewerSubscription`) embedded as a fixed string. |
-| `scripts/fetch-notifications` | `bash`: `exec gh api -i notifications [-H "If-None-Match: $1"]` — the ETag is the one remote-derived script argument anywhere in this plugin. |
-| `scripts/probe-auth` | `bash`: `gh api user --jq .login` under `timeout 25`, translated to one of five stable exit codes. Does **not** call `gh auth status` (see below). |
+| `manifest.json` | Kinds `["service", "bar-widget"]`, `keepLoaded: true`. `entryPoints.service` is `Service.qml`, `entryPoints.barWidget` is `BarWidget.qml`. |
+| `Service.qml` | All state and every `gh` `Process`: the ghPath resolver, the auth probe, the dashboard poller, the notifications poller. **Instantiated exactly once, machine-wide**, by `shell.ensureService()` the first time any bar widget or panel resolves it. |
+| `BarWidget.qml` | The bar-slot entry point (one instance per monitor). Resolves the singleton via `shell.serviceFor("halmylyseas.github-status")`, always null-guarded — the bar paints before the service resolves. Owns the button + icon/count-pill, and hosts `Panel.qml` through an eager `Loader` (`active: true`). |
+| `Panel.qml` | The popup: Hero, search, then five independently-foldable sections (Inbox, Review requests, My open PRs, My open issues, Repositories). Receives `bar`, `settings`, `anchorItem`, `hostWidget` from `BarWidget.injectPanel()` — it resolves `service` itself via the same `shell.serviceFor()` call. |
+| `Model.js` | Pure ES5 logic: `gh` JSON → UI-shape mapping functions, the URL allowlist, the failure classifier, field/list caps. No Quickshell imports, so plain Node can `require()` it (`test/model.test.js`). |
+| `SectionHeader.qml` | Shared section header: label, right-aligned count/`"N of T"`/`"…"` pill, optional `extra` slot (the My open issues Subscribed chip), click-to-fold. |
 
-**The split rule** (same as Ristretto's, `~/.config/omarchy/plugins/halmylyseas.ristretto/docs/developers.md`):
-panels exist once per monitor, so anything singleton — processes, timers,
-network state — belongs in `Service.qml`, and `BarWidget.qml`/`Panel.qml`
-reach it only via `shell.serviceFor("halmylyseas.github-status")`, always
-null-guarded (`shell` may not have injected yet, or the lookup may miss).
-Nothing in either UI file spawns a process, opens a URL, or touches
-`internal` state directly — every mutation funnels through `Service.qml`'s
-`refresh()`/`openUrl()`.
+### Injection contract
 
-## Decisions that look odd until you know why
+`BarWidget.qml` loads `Panel.qml` eagerly (`active: true`, not lazily on
+first click) and calls `injectPanel()` on every load and on every change to
+`bar`/`settings`, handing over `bar`, `settings`, `anchorItem` (the bar
+button, for `KeyboardPanel` positioning), and `hostWidget`. `Panel.qml`
+resolves `service` itself, the same way `BarWidget.qml` does, rather than
+receiving it as a prop — both files independently null-guard every `svc`
+read, since the service may not have resolved yet on first paint, and the
+shell can destroy and recreate a plugin's service instance if the plugin
+registry transiently reports it disabled at startup.
 
-- **No disk cache, no `FileView`, anywhere.** `06-design.md`'s "Security
-  invariants" made this non-negotiable up front, and the two closest prior
-  plugins both paid for the alternative: Ristretto shipped an unbounded
-  `preload: true` `FileView` over a user-writable directory
-  (`RISTRETTO-UNBOUNDED-TOGGLES-FILEVIEW`) and the closest sibling plugin,
-  `viniciusfnery.github-inbox`, was flagged in its own marketplace review for
-  unbounded cache-file reads on predictable paths. Keeping every list in QML
-  memory only (`internal.notifications`/`openPRs`/`reviewRequests`/`repos`,
-  `Service.qml:260-263`) makes that whole finding class structurally
-  impossible — there is no file to swap, symlink, or overgrow. The accepted
-  cost is a blank/"Loading…" panel for a couple of seconds after every shell
-  restart, since nothing survives it.
+### `settings` vs. the service
 
-- **A `gh` HTTP 304 is success, printed as a non-zero exit.** Live-verified
-  (`exchange/07-s1-scaffold.md`): `gh api -i notifications -H
-  'If-None-Match: "<etag>"'` against a genuinely-unchanged inbox prints the
-  full `HTTP/2.0 304 Not Modified` status/header block to **stdout**, `gh:
-  HTTP 304` to **stderr**, and exits **1**. `Model.classifyFailure` matches
-  that stderr text to the tag `"http-304"`, and `handleNotificationsExit`
-  (`Service.qml:709-732`) special-cases it *before* anything reaches the
-  generic failure path: the ETag is refreshed if a new one appears in the
-  header block (it can, even on a 304), `lastSyncMs` bumps via
-  `onFetchSuccess("notifications")`, and — deliberately — `internal.
-  notifications` is **not** reassigned, so no `notificationsChanged` signal
-  fires. That non-signal is itself the proof the 304 branch ran rather than
-  the 200 branch, which always reassigns the array even to `[]`
-  (`exchange/08-s2-service.md`'s probe evidence). Treat any future change
-  near this path with suspicion if it starts unconditionally reassigning
-  `internal.notifications` — that would defeat the whole point of
-  conditional requests (an unchanged inbox becomes a free, near-zero-cost
-  poll).
+The bar-widget `settings` object (`dashboardIntervalSec`,
+`notificationsIntervalSec`, `repoLimit`, `issuesFilter`) belongs to the
+shell's own `shell.json` entry for this plugin; `Service.qml` reads it
+live off `shell.shellConfig` via `findEntry()`, with manifest defaults and
+clamped ranges as fallback — never a live `Timer.interval` binding built
+directly from one of these (see "Process contract" below).
 
-- **Per-source status tracking, worst-of derivation.** The public `status`/
-  `lastSyncMs`/`rateLimitedUntil` (`Service.qml:76-83`) look like plain
-  properties but are all *computed*, never assigned. Three independent
-  sources — the auth probe, the dashboard poller (its own GraphQL rate-limit
-  bucket), the notifications poller (a separate REST bucket, different
-  cadence) — each own `probeStatus`/`dashboardStatus`/`notifStatus` and their
-  own `*LastSyncMs`/`*RateLimitedUntilMs` inside `internal`
-  (`Service.qml:244-289`). `computeStatus()` (`Service.qml:323-328`) takes
-  the worst of whichever sources currently matter, by the fixed severity
-  order `no-gh > unauthenticated > rate-limited > offline > loading > ok`
-  (`worstOf`, `Service.qml:304-309`); `lastSyncMs` is `Math.max` of the two
-  pollers' own sync times (bumped by *either* succeeding, 304 included);
-  `rateLimitedUntil` (`pickRateLimitedUntil`, `Service.qml:334-347`) only
-  ever reflects a source that is *currently* rate-limited. This exists
-  because the naive version — one shared `status`, written by whichever
-  poller finishes last — flaps and masks: a rate-limited dashboard poller
-  gets silently un-flagged the moment the *unrelated* notifications poller
-  succeeds on its own 60s cadence, `status` reads `"ok"` while PR/repo data
-  is actually stale, and the dashboard poller's own rate-limit skip-guard
-  goes moot, causing an immediate wasted retry against a still-rate-limited
-  API. Live-reproduced both broken and fixed (`exchange/12-s5b-correctness-
-  review.md` Finding 2, `exchange/14-s6-fixes.md`'s 90s real-403 probe). The
-  probe's `probeStatus` is deliberately excluded from `computeStatus()` once
-  `internal.pollersActive` is true (`Service.qml:311-328`) — otherwise a
-  single stale/inconclusive probe result (e.g. the watchdog's "offline"
-  classification below) would permanently outrank two healthy, continuously
-  refreshing pollers.
+## Process contract
 
-- **Timer `interval` is assigned imperatively at arm time, never bound
-  live.** `dashboardTimer`/`notificationsTimer` (`Service.qml:567-583`,
-  `662-675`) declare `interval` as a plain literal, then reassign it only at
-  two points: `onRunningChanged` when the timer starts, and at the top of
-  `onTriggered` before scheduling the next cycle. A live binding over
-  `root.dashboardIntervalSec` (itself live over `shell.shellConfig`) was the
-  original shape and was live-reproduced as broken
-  (`exchange/12-s5b-correctness-review.md` Finding 3,
-  `timer-interval-probe.qml`): a QML `Timer`'s live-bound `interval`
-  restarts the countdown from zero on *any* dependency change, discarding
-  whatever fraction of the wait had already elapsed — the exact bug class
-  Ristretto's own suspend-timer review (`A1`) already paid for once. The
-  fix's contract, documented at `Service.qml:568-574`: a settings edit takes
-  effect at the next natural cycle boundary, never mid-wait.
+**Every `gh` invocation is a direct Quickshell `Process` child** — no shell
+wrapper anywhere on the CLI path. `gh` is mise-installed, not on
+Quickshell's own PATH, so its absolute path is resolved once via a single
+`bash -lc "command -v gh"` call (the only shell invocation anywhere in this
+plugin); every fetch after that spawns `gh` itself as a fixed argv array
+plus at most a sanitised ETag as a separate element — never interpolated
+into a shell string.
 
-- **Partial GraphQL: null means "don't replace", `[]` means "genuinely
-  empty".** `scripts/fetch-dashboard` fetches three logically independent
-  things (`openPRs`, `reviewRequests` via a separately-aliased `search`,
-  `repos`) in one GraphQL call. GraphQL itself allows a response to carry
-  `data` for the parts that succeeded *and* `errors` for the ones that
-  didn't in the same envelope — realistic here because `search` has its own,
-  stricter rate-limit bucket than the object-graph API. `Model.mapDashboard`
-  returns each section as either a mapped array (however many nodes, `[]`
-  included — a real "nothing here") or `null` (the field wasn't present as
-  an object in `data` at all). `handleDashboardExit` (`Service.qml:613-637`)
-  only reassigns the sections that came back non-null, logs `parsed.errors`
-  alongside whatever did parse, and only routes to the full-failure path
-  when **all three** are null (`gotSomething`, `Service.qml:618-619`). The
-  earlier shape blanket-discarded the whole fetch on any non-empty `errors`
-  array — safe (never renders garbage) but wasteful, and it fed the status-
-  flapping problem above by classifying a two-thirds-successful cycle as a
-  full failure.
+Four `Process` objects, one contract each (`Service.qml`):
 
-- **URL allowlist + array-form exec, not string interpolation.**
-  `Model.isSafeGithubUrl` (`Model.js:343-...`) requires the
-  `^https://github\.com/` prefix (`SAFE_GITHUB_URL_RE`), rejects any control
-  character or whitespace right after it (`CONTROL_OR_WHITESPACE_RE =
-  /[\x00-\x20\x7f]/`), and caps overall length at `FIELD_CAP_URL` (2048).
-  `Service.qml:openUrl` (`Service.qml:125-131`) checks that, then calls
-  `Quickshell.execDetached(["xdg-open", url])` — an argv array, never a
-  shell string, so even a URL that somehow passed the allowlist can't be
-  shell-reparsed. This two-layer design exists because `apiUrlToWebUrl`
-  builds `webUrl` out of a notification's GitHub-controlled `subject.url`;
-  an adversarial repo/notification is exactly the threat model the security
-  review (`exchange/11-s5a-security-review.md` F1) tested against —
-  `.../pulls/1; rm -rf /` and a literal newline right after the prefix both
-  originally passed a prefix-only check. `apiUrlToWebUrl` itself now
-  restricts owner/repo to `[A-Za-z0-9_.-]+` and validates the trailing ID
-  segment against a per-endpoint charset (`SEGMENT_ID_RE` — digits for
-  issues/pulls/releases/discussions, a hex SHA shape for commits) instead of
-  capturing `(.+)$` unbounded. If you add a new URL-producing code path,
-  route it through `isSafeGithubUrl` before it can reach `openUrl` — there
-  is no second gate.
+| Process | Command | Deadline | Caps |
+|---|---|---|---|
+| `ghPathProc` | `["bash","-lc","command -v gh"]` | `ghPathTimeoutMs` (5s) | shared line/char caps |
+| `probeProc` | `[gh, "api", "user", "--jq", ".login"]` | `probeTimeoutMs` (30s) | shared line/char caps |
+| `dashboardProc` | `[gh, "api", "graphql", "-f", "query="+Model.DASHBOARD_QUERY]` | `dashboardTimeoutMs` (30s) | `dashboardOutputCharsCap` (2MB, one JSON line) |
+| `notificationsProc` | `[gh, "api", "-i", "notifications"[, "-H", "If-None-Match: <etag>"]]` | `notificationsTimeoutMs` (30s) | shared line/char caps |
 
-- **`Text.PlainText` on every GitHub-controlled string; `SafeToolTip`
-  instead of the first-party tooltip.** `Panel.qml` sets `textFormat:
-  Text.PlainText` + `elide: Text.ElideRight` on every `Text` element that
-  renders a remote-derived field (notification/PR/review-request/issue/repo
-  title/reason/meta/age/owner text) — grep-provable
-  (`grep -c 'textFormat: Text.PlainText' Panel.qml` → 20 as of the v1.2
-  delta, up from 19 at v1.1 and 12 pre-delta — only +1 despite G2 adding
-  three new `SafeToolTip` call sites (`PrRow`/`ReviewRequestRow`/`IssueRow`)
-  because `SafeToolTip`'s own `PlainText` is declared once, on its shared
-  `component` definition (`Panel.qml:868-...`); reusing the component at
-  three more sites doesn't add three more grep-visible lines. The one new
-  hit is the G1 search row's "✕" clear glyph. `SectionHeader.qml` → 2 (the
-  pre-existing count pill plus v1.2's fold chevron, both synthesized glyphs —
-  not remote, but PlainText as policy)). This exists
-  because the closest sibling plugin, `viniciusfnery.github-inbox`, was
-  flagged in its own marketplace maintainer review for rendering
-  GitHub-controlled notification titles through a component that
-  auto-detected and rendered HTML-like markup. One catch this plugin's own
-  review found: `qs.Ui.PanelToolTip` (the first-party tooltip component) does
-  **not** set `Text.PlainText` on its internal `Text` — it inherits Qt
-  Quick's `Text.AutoText` default. Since the repository row's hover tooltip
-  shows `lastCommitHeadline` (a commit message — GitHub-controlled, in
-  principle attacker-influenceable even on the user's own repo via a merged
-  PR from someone else), `Panel.qml` defines `component SafeToolTip:
-  ToolTip { ... }` — a structural copy of `PanelToolTip` with `Text.
-  PlainText` forced on its `contentItem`. **Never use `PanelToolTip`
-  directly on remote-derived text in this file** — `grep -n PanelToolTip
-  Panel.qml` should only ever match the comments explaining why
-  `SafeToolTip` exists, never an actual instantiation.
+**Watchdog pattern**: one `Timer` per process, interval assigned
+imperatively at arm time (`_armProcess`), never a live `interval:` binding.
+On firing: `signal(15)` (SIGTERM), then a 1s kill timer sends `signal(9)`
+only if the process is still running **and** its `processId` still matches
+the PID captured at its own `onStarted` — never escalate against a later
+process the queue already started in its place.
 
-- **`SafeToolTip` flips between opening below and above its row, chosen
-  against the panel's own scrollable viewport (v1.3, H2 fix + S20
-  flip-to-fit).** The active QQC2 style's default `ToolTip` position opens
-  *above* its `parent` (`y: -implicitHeight - 3`, e.g.
-  `/usr/lib/qt6/qml/QtQuick/Controls/Basic/ToolTip.qml:12-13`). Every
-  section's rows sit only `Style.space(4)` (~4px) below their
-  `SectionHeader`, and the same `Style.space(4)` apart from each other —
-  far less than a tooltip's own ~35px height — so opening upward always
-  painted over whatever sat directly above the hovered row: the section
-  header for a section's first row (reported live as a tooltip rendering
-  "detached" near the header, exchange/32-human-feedback.md #2), or the
-  previous row's own text otherwise. S18's v1 fix made `SafeToolTip` always
-  open below instead; `exchange/35-s19-delta-review.md` (F1/F2) found that
-  just relocated the collision (onto the *next* row for the common
-  interior-row case) and introduced a new one (the last row of the last
-  section could paint past the panel card's own bottom edge, since QQC2
-  `Popup`s render via the top-level `Overlay` and ignore every ancestor's
-  `clip`). S20's fix: `SafeToolTip` gained `viewport`/`rowItem` properties,
-  set explicitly by each of the 4 call sites (`viewport: panelFlick`,
-  `rowItem: <ownRowId>`) — below stays the default, but when the row sits
-  close enough to the viewport's visible bottom edge that the tooltip would
-  cross it, it opens above instead (falling back to below only if that
-  would also cross the viewport's top). This reliably keeps the tooltip
-  inside the card at every boundary tested (a section's last row, the
-  panel's true last row, scrolled or not) — see `Panel.qml`'s own
-  `SafeToolTip` header comment and `exchange/36-s20-release.md` for the
-  full repro/diagnosis and proof. A section's first row never flips above
-  even when it's the one short on room below: `firstInSection` (set by
-  each Repeater delegate from its own `index === 0`) forces "below" for
-  that row unconditionally, because "above" for a first row always means
-  the SECTION HEADER, not another row — this was **not** caught by the
-  synthetic probe harness alone; it was found live, during S20's own
-  deploy-time verification (hovering a section's first row after enough
-  content above it pushed it near the panel's height cap flipped the
-  tooltip onto the header, reproducing the exact defect the v1 H2 fix
-  eliminated), and only then reproduced synthetically and fixed. It does
-  **not** eliminate every case of a tooltip overlapping adjacent row text:
-  a row comfortably in the interior of a long section (not near any header
-  or viewport edge) still has its tooltip land partly on the *next* row's
-  text when opened below, because the tooltip (~35px) is taller than the
-  gap on *both* sides (~4px) — flipping to open above there would just
-  relocate the same defect onto the *previous* row. exchange/36 documents
-  this as a known, accepted residual limitation of a two-way flip, not
-  something S20 missed. Three implementation traps worth knowing if this
-  code is touched again: (1) `Panel.qml`'s components aren't `pragma
-  ComponentBehavior: Bound` (the file's own qmllint-baseline note below);
-  reading a Repeater delegate's own geometry via the bare `parent` property
-  from inside a JS *function block* binding (as opposed to a plain
-  expression) resolved to the same single Item's geometry across every
-  delegate instance — pass an explicit `property Item rowItem` set
-  declaratively at each call site instead, never `parent`, inside this
-  kind of binding. (2) `mapToItem`/`mapToGlobal` are plain synchronous
-  coordinate-transform calls, not bindable properties — a binding that
-  only calls them goes stale on scroll and never re-fires unless it also
-  directly reads a real bindable property that changes with scroll
-  (`Flickable.contentY`). (3) A synthetic probe harness, however
-  thorough, encodes the fixture shapes its author thought to try — the
-  first-row-header-collision case above only surfaced once the fix was
-  deployed and hovered on the real panel with real (larger) data volume;
-  treat "harness-clean" as necessary, not sufficient, for a live redeploy
-  verification pass. The *other* half of the original bug report ("hovering
-  one row does nothing") turned out not to be a bug at all: that row's real
-  GitHub issue genuinely has zero comments (`comments(last: 1)` correctly
-  returns no nodes), so an empty tooltip is the spec-correct result, not a
-  wiring failure — verified against live-fetched data before touching any
-  code.
+**Failed-start semantics**: a `Process` whose binary can't be found flips
+`running` to `false` **without ever emitting `exited`**. Every `Process`
+has an `onRunningChanged` that schedules a `Qt.callLater` check, guarded by
+a per-kind generation counter (bumped on every arm, stamped by the real
+`onExited`) so a stale deferred check can never misfire against a newer,
+still-running process — this synthesizes exit code 127 exactly when a real
+`exited` never came.
 
-- **`viewer.issues(states: OPEN, ...)` with no `filterBy` is already
-  authored-scoped — no `search author:@me` fallback needed.** v1.1's F3
-  ("issues opened by the user") needed the query's exact semantics
-  live-verified, not assumed: is `viewer.issues` "issues assigned to the
-  viewer's repos" or "issues the viewer themselves authored"? A read-only
-  `gh api graphql` probe against the real account
-  (`exchange/20-s8-data-delta.md`) returned 5 issues across 5 different
-  repos the account doesn't own, every one with `author.login ===
-  viewer.login` — conclusively authored-scoped, the same shape `viewer.
-  pullRequests` (the existing `openPRs` connection) already has. The spec's
-  documented fallback, `search(query: "is:open is:issue author:@me", type:
-  ISSUE)`, bills GraphQL's stricter `search` rate-limit bucket (the same
-  concern already on record for `reviewRequests`) and was never needed.
-  `scripts/fetch-dashboard` adds this as `myIssues: issues(...)`, aliased
-  the same way `openPRs`/`repos` are, in the same single query. If GitHub
-  ever changes this connection's semantics, the fallback in
-  `exchange/19-feedback-delta-spec.md` is the documented next step — verify
-  live again before switching, the same way this decision itself was made.
+**Output caps**: one shared `_appendBoundedOutput` helper backs all four
+processes' buffers. Arrays are always **replaced**, never `.push()`ed, so
+QML bindings notice. On breach, the line is capped so the total lands at
+the limit, `signal(15)` is sent, and an overflow counter increments.
 
-- **The repo sort feature (F1: `Model.sortRepos`, `Service.qml`'s
-  `repoSort`/`setRepoSort()`, the recent/stars header toggle) was removed
-  entirely by `exchange/33-feedback3-delta-spec.md` H3.** Repos now render
-  in the fetch order `repositories(first: 20, orderBy: {field: PUSHED_AT,
-  direction: DESC}, ...)` already returns (`scripts/fetch-dashboard`),
-  sliced to `repoLimit` (3–30) at read time in `Service.qml` — no
-  client-side sort layer left, and the "Repositories" section header
-  (renamed from "Repo activity" by the same H3) carries no toggle, just its
-  label and count pill. **A stale `repoSort` key left over in an existing
-  user's `shell.json` entry from before 1.3 is harmless**: nothing in
-  `Service.qml` reads it anymore, and `Model.mergedSettings`'s "current
-  entry plus one changed key" merge shape (still used by `setIssuesFilter`)
-  preserves whatever unrecognized keys are already present rather than
-  stripping them, so the key just sits there inert — never re-read, never
-  displayed, never causing a schema/validation error. The manifest's own
-  `repoSort` schema entry and default are also removed, so Omarchy's
-  settings form no longer offers it either.
+## Status ladder and re-probe rules
 
-- **The probe watchdog, and why `probe-auth` needs its own `timeout 25`.**
-  `dashboardProc`/`notificationsProc` both `exec gh ...` directly in their
-  scripts, so the PID Quickshell's `Process` tracks *is* `gh` — a
-  `Process.running = false` kills it directly. `scripts/probe-auth` cannot
-  do that: it needs to capture `gh api user`'s output and branch on it
-  (401 vs. everything else), so it runs `output="$(gh api user ...)"`, a
-  command substitution that forks a subshell — the tracked PID is one
-  generation *above* the real `gh` call. Two consequences, found the hard
-  way: (1) without a watchdog at all, a hung `gh api user` (network not yet
-  up at boot, a captive portal, a stalled TCP connection with no fast
-  refusal) left `probeProc.running` permanently `true`, so `startProbe()`'s
-  own re-entrancy guard silently no-op'd every future attempt forever,
-  including every 5-minute `reProbeTimer` firing — the plugin stuck on
-  "Loading…" with no self-recovery short of a manual restart
-  (`exchange/12-s5b-correctness-review.md` Finding 1, live-reproduced: five
-  consecutive silent no-ops over 16s). `probeWatchdog`
-  (`Service.qml:540-555`), matching `dashWatchdog`/`notifWatchdog`'s exact
-  30s shape, fixes that — but (2) force-stopping the *tracked* PID only
-  kills the wrapper script, leaving the real `gh api user` call orphaned and
-  still running. Fixed by wrapping the call itself in `timeout 25` inside
-  `scripts/probe-auth` (under the QML watchdog's 30s, so it fires first in
-  the ordinary case and actually terminates `gh`, with the QML watchdog as a
-  pure backstop). Live-verified: direct isolated run against a hanging mock
-  `gh` — exit 5, elapsed exactly 25s, zero leaked processes afterward.
-  The watchdog classifies a timeout as `"offline"`, not `"no-gh"` (a hang is
-  network-shaped, not "the binary is missing"), and unconditionally sets
-  `internal.pollersActive = true` so the real pollers get to determine the
-  true state themselves rather than waiting on an inconclusive probe.
+`status` is `"ok" | "loading" | "no-gh" | "unauthenticated" | "offline" |
+"rate-limited"`, computed by `worstOf()` over a fixed severity order
+(`no-gh > unauthenticated > rate-limited > offline > loading > ok`). Three
+independent sources feed it: the auth probe, the dashboard poller, and the
+notifications poller, each with their own `*Status`/`*LastSyncMs`/
+`*RateLimitedUntilMs`. Once `internal.pollersActive` is true, `probeStatus`
+is excluded from `computeStatus()` — its only job is the initial "is `gh`
+even usable" gate, and once the real pollers are running their own signal
+is authoritative.
 
-- **F4's "…"-vs-confirmed-"0" pill is gated per-source, not on the blended
-  `lastSyncMs`.** (`exchange/23-s11-delta-review.md` F1, fixed in S12.)
-  `dashboardTimer`/`notificationsTimer` both have `triggeredOnStart: true`
-  and both start the instant `internal.pollersActive` flips true — on
-  essentially every cold start they fire their first fetch in the same JS
-  tick and race two genuinely independent, differently-shaped `gh` calls
-  (one combined GraphQL query vs. one lightweight REST GET) with no
-  ordering guarantee. The original implementation gated all five
-  `SectionHeader`s' "…" state on one property (`Panel.qml`'s `root.synced`,
-  `!!svc && svc.lastSyncMs !== 0`) — `lastSyncMs` is `Math.max` of the two
-  pollers' own sync times, so it flips true the moment EITHER poller
-  succeeds. Whichever poller lost the race then had up to four sections
-  (or one, in the symmetric case) show a real `count === 0` fold — "0", not
-  "…" — for data that had never actually been fetched, exactly the false
-  "confirmed empty" state F4 was specced to prevent. `Service.qml` now
-  exposes `dashboardLastSyncMs`/`notificationsLastSyncMs` (public, alongside
-  the still-blended `lastSyncMs`, which stays the hero's "Synced Xm ago"
-  signal — nothing there needed to change), and `Panel.qml` gates each
-  `SectionHeader` on the one source that actually backs it: `notifSynced`
-  for Inbox, `dashboardSynced` for the other four. See
-  `exchange/24-s12-release.md` for the cold-start probe evidence (both
-  orderings of the race, before/after).
+On any transition to `no-gh`/`unauthenticated`, both pollers stop
+(`pollersActive = false`) and `reProbeTimer` (5 min, probe-shortenable)
+arms. `handleProbeResult`'s success path clears a stale
+`no-gh`/`unauthenticated` poller status back to `"loading"` — without this,
+mid-session recovery (`gh` reappearing, re-authenticating) would deadlock
+on a status nothing will ever update, since nothing re-evaluates a blocked
+poller's own status once it is set.
 
-- **`internal.login` can now be learned two ways, not one — and why the
-  second way is a one-shot re-map, not a live re-derivation.**
-  (`exchange/23-s11-delta-review.md` F2, fixed in S12.) Previously,
-  `internal.login` was set only inside `handleProbeResult`'s `exitCode ===
-  0` branch — if the very first auth probe failed with a non-auth
-  classification (`"offline"`/`"rate-limited"`/`"error"`, all reachable from
-  `probe-auth`'s generic exit-5 bucket) or hung into `probeWatchdog`, the
-  pollers still started (correct — never block polling on the probe alone),
-  but nothing ever scheduled another probe attempt, since `reProbeTimer`'s
-  only other restart sites are the no-gh/unauthenticated branches. F6's
-  owner pill on every Inbox row silently and permanently disabled
-  (`isExternalOwner`'s conservative default treats an unknown login as
-  "never external") for the rest of the session — no self-heal short of a
-  restart. The realistic trigger ("the network isn't up yet at shell
-  startup or resume-from-suspend") is the ordinary case, not an edge case —
-  the exact scenario `exchange/12-s5b-correctness-review.md` Finding 1
-  already flagged for the probe hanging in the first place. Two-part fix:
-  (a) `handleDashboardExit` opportunistically captures `internal.login` off
-  `Model.mapDashboard`'s new `login` return field (every dashboard response
-  carries `viewer.login` whenever any viewer-scoped section resolved — a
-  free read, no extra `gh` call) whenever `internal.login` is still empty;
-  (b) `maybeRearmReProbeForLogin()` restarts `reProbeTimer` (the existing
-  5-minute "slow re-probe" cadence, not a new faster one) after a non-auth
-  probe failure or watchdog timeout, purely to keep retrying login capture,
-  independent of `pollersActive`. Both capture sites are guarded to set
-  `internal.login` **only from empty**, never overwrite an already-known
-  value — this is deliberate, not an oversight: it keeps the fix from
-  fighting the F3 accepted-risk tradeoff below (a live re-derivation on
-  every dashboard response would "fix" F3 but reopen it as a
-  correctness/trust question — which source wins if the probe and the
-  dashboard ever briefly disagree — that's out of scope for a targeted
-  fix). Because `internal.notifications` only ever holds the already-mapped
-  list (the raw REST body is never retained past `handleNotificationsExit`,
-  by design — see the ETag/304 note above), the one-shot re-map after (a)
-  learns the login re-derives `isExternal` from each item's own already-
-  known `owner` field (`Model.remapNotificationsExternal`) rather than
-  waiting out a full `notificationsIntervalSec` poll or needing to retain a
-  second copy of raw data anywhere.
+## Partial-dashboard accounting
 
-- **G1 search field is not auto-focused on open — the key catcher keeps
-  focus by default, the field earns it only on click.** (v1.2,
-  `exchange/26-feedback2-delta-spec.md`, `exchange/28-s14-ui-delta.md`.)
-  `KeyboardPanel` already force-focuses its own `PanelKeyCatcher` on every
-  open via an internal `Qt.callLater`; a second, independent
-  `Qt.callLater(searchField.forceActiveFocus)` from `Panel.qml`'s own
-  `onOpenedChanged` would race that — undocumented ordering between two
-  handlers scheduled into the same event-loop queue, not a guarantee. The
-  shape actually used follows the closest first-party precedent for an
-  inline text editor living inside a `KeyboardPanel` — the network plugin's
-  Wi-Fi passphrase prompt (`/usr/share/omarchy/shell/plugins/panels/network/
-  Panel.qml:834-874,991-996`): a real `Ui/TextField`, focused only by an
-  explicit user action (a click), with `PanelKeyCatcher.blocked: !!
-  searchField && searchField.activeFocus` so the moment the field holds
-  focus, the catcher stops intercepting keys — `PanelKeyCatcher.qml`'s own
-  header comment prescribes exactly this shape. The image-picker's
-  `filterable` idiom (typing directly into an invisible-focus carousel via
-  its own `Keys.onPressed`) was considered and rejected: that panel never
-  binds `j/k/h/l`, this one already does (`PanelKeyCatcher`'s vertical
-  scroll), and `PanelKeyCatcher.Keys.onPressed`'s own if/else chain consumes
-  those letters *before* the generic `textKey` channel a filterable-style
-  field would need — concretely, **"Nujabes" contains a "j"**, the human's
-  own example string, which would have been silently truncated typing
-  through that channel. Esc is handled locally on the field itself
-  (`Keys.onEscapePressed`): clears a non-empty query first, closes the panel
-  on a second Esc — no change to `PanelKeyCatcher` itself. A clickable "✕"
-  is always present too, for mouse users and as a fallback.
+`Model.mapDashboard` returns each of `openPRs`/`reviewRequests`/`repos`/
+`myIssues` as either a mapped array (however many nodes — `[]` is a
+legitimate "nothing here") or `null` ("did not resolve, don't replace").
+`handleDashboardExit` reassigns only the sections that came back non-null,
+sets `dashboardPartial` when some (not all) parsed, and only routes to the
+full-failure path when **every** section is null. Each section's real
+GraphQL `totalCount`/`issueCount` rides alongside it, `null` exactly when
+that section is — this is what lets `SectionHeader`'s pill read `"N of T"`
+once the real total exceeds the rendered/capped window.
 
-- **G4's `subscribed` fails open, in both directions, deliberately.**
-  (v1.2, `exchange/26-feedback2-delta-spec.md`.) `Model.
-  subscribedFromViewerSubscription` treats a missing/`null`
-  `viewerSubscription` field as `true` (subscribed), never `false`; `Model.
-  filterIssues`'s `"focus"` branch keeps a row whose `subscribed` field is
-  anything other than exactly `false` (`subscribed !== false`, not
-  `subscribed === true`). Both choices point the same direction on purpose:
-  a schema hiccup, a future GraphQL field rename, or a hand-built/legacy
-  item missing the field entirely must never cause an issue the user cares
-  about to silently vanish under the default "Focus" view — the failure
-  mode of an over-eager filter (an issue wrongly hidden) is worse than the
-  failure mode of an under-eager one (an issue wrongly shown, which is
-  exactly what "All" is there to reveal anyway). This mirrors the project's
-  existing fail-open precedent for `isExternalOwner`'s "unknown login is
-  never external" default. Live-verified against the real account
-  (`exchange/27-s13-data-delta.md` §1): `ValveSoftware/Proton#8626` comes
-  back `viewerSubscription: "UNSUBSCRIBED"` → `subscribed: false` → hidden
-  in Focus, the exact acceptance case from the human's own feedback.
+A genuine notifications HTTP 304 (no-change) is success, not failure: the
+ETag is refreshed if a new one appears, `lastSyncMs` bumps, but
+`internal.notifications` is deliberately **not** reassigned (no signal
+fires) — the conditional-request contract that makes an unchanged inbox
+cost near-nothing.
 
-- **G3's fold state is session-only, per-panel-instance, deliberately not
-  persisted to `shell.json`.** (v1.2, `exchange/26-feedback2-delta-spec.md`.)
-  `Panel.qml`'s five `xCollapsed` booleans
-  (`inboxCollapsed`/`reviewRequestsCollapsed`/`openPRsCollapsed`/
-  `myIssuesCollapsed`/`repoActivityCollapsed`) are plain properties on the
-  panel root, reset alongside `searchQuery` in the same `onOpenedChanged`
-  branch — "resets on panel reload" is the spec's own words, not an
-  implementation shortcut. This is a different persistence tier than
-  `issuesFilter` (goes through `Model.mergedSettings` →
-  `shell.updateEntryInline`, survives a restart) on purpose: a fold is a
-  transient "I don't need to see this right now" gesture scoped to one
-  look at the panel, not a standing preference like which issues to see by
-  default — persisting it would mean a section a user folded once during a
-  busy afternoon stays invisible forever until they remember to unfold it,
-  silently hiding future data the way F4's own "less old clutter" complaint
-  was originally about. If a future feedback
-  round asks for persisted fold state, it is a new, explicit decision, not
-  a natural extension of this one.
+## Security invariants
 
-## Accepted risks (documented, not fixed)
+- **Read-only GitHub, always.** Only `gh api` GET and `gh api graphql`
+  queries; never a mutation (`CLAUDE.md` rule 2).
+- **URL allowlist + array-form exec.** `Model.isSafeGithubUrl()` requires
+  the `^https://github\.com/` prefix, rejects any control character or
+  whitespace right after it, and caps overall length; `Service.qml.openUrl`
+  checks that, then calls `Quickshell.execDetached(["xdg-open", url])` — an
+  argv array, never a shell string.
+- **`Text.PlainText` on every remote-derived `Text{}` sink** (enforced by
+  `test/qml-sinks.test.js`, which scans every `.qml` file's `Text{}` bodies)
+  — a hostile relay/title/headline can never be interpreted as rich text.
+  `SafeToolTip` in `Panel.qml` is a drop-in `PanelToolTip` replacement that
+  forces this, since the first-party tooltip does not.
+- **No disk cache of GitHub data.** Every list lives in QML memory only.
+  The one thing this plugin writes to disk is its own settings entry, via
+  `bar.shell.updateEntryInline()`, which **replaces** the whole entry —
+  `Model.mergedSettings()` always builds current-plus-one-changed-key so a
+  single-setting write can never clobber the others.
 
-- **`StdioCollector` has no byte ceiling.** Every `Process`'s stdout is
-  buffered into one JS string before `onExited` fires (`probeOut`/`dashOut`/
-  `notifOut`, `Service.qml:503-504,604-605,700-701`) — Quickshell doesn't
-  expose a size limit on `StdioCollector`, only `waitForEnd`. Left
-  unbounded deliberately, per-source rationale documented inline at each
-  declaration site: `fetch-dashboard`'s GraphQL query hard-caps every list
-  with explicit `first:` values (20/20/10); `fetch-notifications` never
-  passes `--paginate`, so at most one default-sized REST page is ever
-  requested; `probe-auth`'s `gh api user` has an inherently tiny response
-  shape. All three also sit under the shared 30s watchdog backstop. The
-  actual threat model here is a malicious repo's *content* (titles,
-  headlines), which this bounds fine — an oversized response would require
-  something outside that model entirely (a compromised/MITM'd
-  `api.github.com`, or a `gh`/GitHub server bug), which is out of scope for
-  v1. If Quickshell ever exposes a `StdioCollector` size cap, use it.
+## Accepted risks
 
-- **The count pill is bespoke — there was no first-party pattern to copy.**
-  Unlike the boolean status-dot (`omarchy.tailscale`) or whole-glyph
-  recoloring (`agents`' `active` state), nothing shipped in
-  `/usr/share/omarchy/shell/` renders a numeric bar badge
-  (`exchange/03-shell-api.md` §13 trap 13). `BarWidget.qml`'s count-pill
-  `Rectangle` (min-width `Style.space(14)`, width grows to fit the digits,
-  negative-overhang anchoring so it sits astride the icon's corner) was
-  built from scratch, theme-token-driven (`Style.space`, `Color.background`
-  for text-on-pill contrast, `root.urgent`/`Color.urgent` for the fill), and
-  capped via `Model.badgeText()` ("99+" past 99) so a large unread count
-  can't blow out the bar's fixed slot width. It has since been visually
-  confirmed correct at 5/42/100/999 via a fabricated-data probe
-  (`exchange/13-s5c-visual-review.md` §1) — since the real account this
-  plugin was built against never has more than a handful of unread
-  notifications, so it never exercised the pill live. If you touch this
-  geometry, re-run a similar fabricated-data visual pass rather than trusting
-  the live account to ever produce a large count.
+- **`StdioCollector`/`SplitParser` buffer a line in full until its
+  newline** — an adversarial response with no newline would be buffered by
+  Quickshell itself before this plugin's own char caps see a byte. Accepted:
+  the source is the user's own authenticated `gh` CLI.
+- **`internal.login` never refreshes once known** — a mid-session `gh`
+  account switch leaves isExternal/owner pills using the stale identity
+  until a restart. Cosmetic only; every real API call still uses whichever
+  identity `gh` itself is actually authenticated as.
+- **One `IpcHandler` per monitor** (`Panel.qml` owns it) — a benign
+  "Handler was registered but will not be used" warning per extra monitor.
 
-- **`internal.login` never refreshes once known — a mid-session `gh` account
-  switch leaves F6's owner pills using the stale identity until a restart.**
-  (`exchange/23-s11-delta-review.md` F3, S12's binding disposition: accepted
-  as a note, not fixed.) `internal.login` can be set two ways
-  (`Service.qml`'s `handleProbeResult` on a successful probe, and S12's own
-  F2 fix — `handleDashboardExit`'s opportunistic capture off a dashboard
-  response's `viewer.login`) but both are guarded to only ever set it FROM
-  empty (`if (login) internal.login = login` / `if (mapped.login &&
-  !internal.login)`) — deliberately, so a stray/wrong value never clobbers
-  an already-known-good login. The consequence, traced through the actual
-  F2 fix rather than assumed: if the authenticated `gh` identity changes
-  mid-session (`gh auth login` as a different user, out of this project's
-  read-only threat model but plausible as an operator action), every
-  subsequent probe success AND every subsequent dashboard response's own
-  `viewer.login` is silently ignored by both capture sites — `internal.login`
-  stays pinned to the pre-switch identity for the rest of the session, and
-  Inbox/PR/issue rows' `isExternal`/`owner` marking (case-insensitive
-  compare against the stale login, `Model.js:93-98`) misclassifies exactly
-  as `exchange/23` originally flagged: rows now owned by the new account
-  wrongly show an owner pill, rows matching the *old* login wrongly show
-  none. **This is unchanged by the F2 fix, by design** — F2 solves "never
-  learned at all", not "learned once, now wrong"; solving the latter would
-  mean trusting a live re-derivation over the probe's own authoritative
-  value, reopening exactly the "re-mapping storm" risk the guard exists to
-  avoid. Narrow, cosmetic-only (no crash, no wrong data fetched, `gh` itself
-  is still the authenticated identity actually used for every real API
-  call), self-corrects on the next shell/plugin restart. Mirrors the
-  already-accepted "ETag never resets on an auth-state transition" note in
-  `exchange/11-s5a-security-review.md` F4 — same severity class.
+## Dev workflow
 
-## Workflow traps (each one cost real time)
+Every save under `~/.config/omarchy/plugins/` reloads the whole bar, so
+develop in a separate clone and deploy in one burst:
 
-- **Dev workflow is rsync-based, not edit-in-place, to spare the live bar a
-  flash per save.** Every file save under `~/.config/omarchy/plugins/`
-  triggers a full plugin reload (the shell runs `inotifywait -r` over that
-  tree), tearing down and rebuilding every bar widget — visible as a flash
-  on the user's actual desktop. The canonical working repo lives at
-  `~/git/omarchy-github-status-plugin/plugin/` (a real git checkout);
-  install a test round with:
+```bash
+git -C ~/.config/omarchy/plugins/halmylyseas.github-status pull <work-clone> <branch>
+omarchy restart shell   # required after structural / new-file changes
+omarchy-shell halmylyseas.github-status __probe__   # "Function not found." = loaded
+```
 
-  ```bash
-  rsync -a --delete --exclude .git ~/git/omarchy-github-status-plugin/plugin/ \
-    ~/.config/omarchy/plugins/halmylyseas.github-status/
-  ```
-
-  one flash per test round, not per save. Post-release, the installed
-  folder *is* the canonical clone (see "Releasing an update" below) —
-  `.git/` is exempt from the reload watch, so commits there are silent, but
-  doc/code edits are not.
-
-- **A structural QML edit (new file, bar-widget change) needs `omarchy
-  restart shell`.** Hot reload never re-creates a registered widget
-  component, and a file added after the first scan fails with `File name
-  case mismatch` even though it exists on disk. Don't debug a widget that
-  "ignores" an edit before restarting.
-
-- **Every `omarchy restart shell` needs the mandatory idle-revive
-  afterward**, or `omarchy.idle`'s idle monitor stays silently dead (no
-  screensaver, no lock — `omarchy-shell idle status` looks healthy anyway):
-
-  ```bash
-  omarchy toggle idle stay-awake
-  sleep 5
-  omarchy toggle idle allow-idle
-  ```
-
-  The `sleep 5` between the two matters — the CLI only touches a flag file
-  the idle service watches asynchronously, and a rapid create+delete loses
-  the delete. Verify Ristretto (the user's production plugin) survived:
-  `omarchy-shell halmylyseas.ristretto __probe__` → `Function not found.`
-  means it's still loaded.
-
-- **`qmllint` needs an import root containing a `qs` entry** and is not on
-  `PATH`:
-
-  ```bash
-  mkdir -p /tmp/qmlroot && ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
-  /usr/lib/qt6/bin/qmllint -I /tmp/qmlroot -I /usr/share/omarchy/shell Service.qml BarWidget.qml Panel.qml SectionHeader.qml
-  ```
-
-  Expected clean baseline for this codebase (matches the marketplace-
-  validated Ristretto's own lint output under the same invocation): one
-  `signal-handler-parameters` warning per `onExited: function(exitCode,
-  exitStatus)` handler (3, one per `Process` in `Service.qml`),
-  `missing-property` on `bar.*`/`Style.*`/`Color.*` (qmllint can't resolve
-  the dynamically-built singleton sub-trees across the generic-`QObject`
-  injection boundary), and "Unqualified access" inside nested `component`
-  blocks lacking `pragma ComponentBehavior: Bound` (same shape
-  `agents/Panel.qml` ships with). Zero errors is the bar; new warning
-  *classes* beyond these three are worth investigating, not the counts.
-
-- **Liveness is the IPC probe, not the plugin list.** `omarchy-shell
-  halmylyseas.github-status __probe__` → `Function not found.` means loaded;
-  `Target not found.` means not. `omarchy plugin list --json`'s `active`
-  field is not a reliable signal.
-
-- **Never pass the GitHub octicon (a Nerd-Font PUA glyph, U+F09B) through a
-  bash heredoc or a plain exact-match edit tool without verifying the
-  bytes landed.** This bit twice during development, and neither time
-  through a heredoc specifically — a plain `Write` of `text: ""` silently
-  produced an *empty* string where the glyph belonged (dropped, not
-  mismatched), in both `BarWidget.qml` and `Panel.qml`. PUA glyphs render as
-  invisible/blank boxes in most terminal fonts, so an empty string and a
-  present-but-unrenderable glyph are visually identical — qmllint has no
-  opinion on glyph correctness either. The only check that caught it was a
-  byte-level audit after every write:
-
-  ```bash
-  python3 -c "print([hex(ord(c)) for c in open('BarWidget.qml', encoding='utf-8').read() if ord(c) > 0xe000])"
-  ```
-
-  should list `0xf09b` at least twice in `BarWidget.qml` (bar icon; none in
-  the pill itself) and once in `Panel.qml` (hero icon). Run this after any
-  edit that touches those lines.
-
-- **The repo is the installed folder — no symlink inside it, and no
-  symlinked plugin directory at all.** `omarchy plugin validate` hard-
-  rejects a symlinked plugin directory (`build-catalog.mjs:383-385`'s
-  submission-time check has a live-time analog). The canonical checkout
-  lives at `~/.config/omarchy/plugins/halmylyseas.github-status/`; any
-  working-copy convenience symlink points *at* it, never the other way
-  round.
-
-- **Never `omarchy plugin clone` a first-party plugin** — it replaces the
-  built-in. Read `/usr/share/omarchy/shell/` freely for reference (safe,
-  encouraged); never write there — every update destroys it, and it's
-  outside this project's remit entirely (`CLAUDE.md` hard rule 4).
+Installs and updates track the installed folder's branch **HEAD**, not a
+specific reviewed commit — so `master` is release-only; day-to-day work
+happens on a feature/hardening branch and only merges to `master` when
+ready to ship.
 
 ## Testing
 
-**Stale, pending G4's full rewrite:** this section predates both the G2
-native rework (`test/scripts.test.sh` is gone with `scripts/`) and G3's
-actual probe suites. Current facts: `./test/all` runs, in order,
-`test/model.test.js` (Node, pure `Model.js`), `test/qml-sinks.test.js`
-(Node; scans every `.qml` file at the plugin root for a `Text{}` sink
-missing `textFormat: Text.PlainText`), `test/probe/run` (a `qs -n -p`
-instance loading the real `Service.qml` against `test/mocks/gh`, driving
-its full status ladder incl. the C2/C4 folded findings), and
-`test/probe/run-ui` (a second `qs -n -p` instance loading the real
-`BarWidget.qml`/`Panel.qml` — which itself eagerly loads `Panel.qml` — 
-against a stub `bar`/`shell` and that same mock `gh`, covering rendering,
-the C3 pills, the degraded ladder, C2's partial surfacing, search, fold,
-the `svc` null→new-instance lifecycle, and the `openUrl` allowlist).
+`bash test/all` runs, in order:
 
-- `./test/all` runs both suites and exits non-zero on any failure:
-  - `node test/model.test.js` — every `Model.js` export, pure-function
-    tests, no Quickshell/QML involved. Includes adversarial input (control
-    characters, oversized fields, malformed/partial GraphQL envelopes,
-    fabricated 500–5000-item arrays to exercise the list caps) and the
-    live-observed byte shapes of `gh`'s 200/304 header blocks.
-  - `bash test/scripts.test.sh` — runs `scripts/*` for real, with
-    `test/mocks/gh` shadowing the real `gh` binary on `PATH` (same pattern
-    as `ssupt.bluetooth-audio`'s precedent). Covers `fetch-dashboard`
-    against a fixture, `fetch-notifications`'s three ETag states (none /
-    matching-304 / non-matching-fresh), and `probe-auth`'s four exit codes.
-- **State-machine logic (per-source status tracking, arm-time timer
-  intervals, the probe watchdog) lives entirely in `Service.qml` — QML, not
-  Node-testable.** This project's verification method for that layer is a
-  standalone `qs -p <probe>.qml` instance: a throwaway Quickshell process
-  loading the real `Service.qml` via a `Loader` against a stub `shell`
-  object, with `Connections` logging every public-property change to a
-  file (never a pipe — pipes block-buffer and can swallow output). This
-  never touches the live shell, never touches `~/.config/omarchy`, and
-  makes real (read-only) `gh` calls against the authenticated account when
-  exercising success paths. For a UI-only visual pass without a real
-  Quickshell bar, a second harness pattern symlinks `Commons`/`Ui` from
-  `/usr/share/omarchy/shell/` into a throwaway directory next to the probe
-  config so `import qs.Commons`/`import qs.Ui` resolve, then drives the
-  real `BarWidget.qml`/`Panel.qml` against a fully fabricated stub service
-  (fake unread counts, fake degradation states, fake full-caps data) to
-  exercise UI states the real account never produces — screenshots via a
-  spawned `grim -g <geometry>` cropped to just the plugin's own bar slot +
-  popup, never full-screen (avoids capturing the rest of the live desktop).
+- `test/model.test.js` (Node) — every `Model.js` export, pure-function
+  tests: adversarial input (control characters, oversized fields,
+  malformed/partial GraphQL envelopes, huge arrays to exercise list caps)
+  plus real captured `gh` output shapes.
+- `test/qml-sinks.test.js` (Node) — scans every `.qml` file at the plugin
+  root for a `Text{}` sink missing `textFormat: Text.PlainText`.
+- `test/comment-hygiene.test.js` (Node) — scans every shipped file
+  (`git ls-files`) for a comment run longer than 3 lines or a forbidden
+  project-log token; kept clean by the same rule this file's own prose follows.
+- `test/probe/run` — a `qs -n -p` instance loading the real `Service.qml`
+  against `test/mocks/gh` (a PATH/absolute-path-shadowed mock driven
+  entirely by argv), driving the full status ladder: ok, unauthenticated
+  recovery, no-gh recovery, mid-session binary removal/recovery, offline,
+  rate-limited (with a real reset-header round-trip), a hung `gh` (watchdog
+  fires), a flooding `gh` (output cap fires), a partial GraphQL envelope,
+  and a malformed notifications 200 body. Asserts no orphaned mock process,
+  qs exit 0, and no engine errors in the log.
+- `test/probe/run-ui` — a second `qs -n -p` instance loading the real
+  `BarWidget.qml` (which eagerly loads `Panel.qml`) against a stub
+  `bar`/`shell`, plus the real `Service.qml` against the same mock `gh`.
+  Covers rendered section counts vs. the fixture, `"N of T"` pills, the
+  degraded ladder, the partial-dashboard surface, live search narrowing,
+  fold/unfold against the actual rendered tree, the `svc` null→new-instance
+  lifecycle (zero TypeErrors), and the `openUrl` allowlist (a non-github URL
+  never reaches the PATH-shadowed `xdg-open` mock).
+- `omarchy plugin validate .` and qmllint on every `.qml` file must show 0
+  errors before a commit that touches QML.
 
-## Releasing an update
+## Releasing
 
-The marketplace lists an exact validated commit, not a branch — this
-plugin's own submission mechanics are documented at
-`exchange/05-marketplace.md` §2 if that doc is present; the durable
-procedure (mirroring Ristretto's, which has actually shipped an update
-through it) is:
+Creating the public GitHub repository is a human step. Marketplace
+submission — the `HANCORE-linux/omarchy-plugin-marketplace` issue, six
+required headings, the AI-agent-clause attestation — needs explicit human
+approval and is never filed by an agent. Updates after listing go through a
+**Plugin verification** issue (template `verify-plugin.yml`, "Verify and
+publish a newer upstream commit") naming the plugin ID
+(`halmylyseas.github-status`), the repository URL, and the full 40-character
+SHA of the pushed `master` `HEAD`. Do not push to `master` mid-review of a
+pending submission or verification issue — approval is bound to the exact
+commit that was validated. Editing an open issue (never opening a second
+one) re-runs the bot's checks.
 
-1. Bump `version` in `manifest.json`, commit, push `master`.
-2. Re-run `./test/all`, `omarchy plugin validate .`, and qmllint on a clean
-   checkout before the release commit — not the rsynced/live copy.
-3. Open a **Plugin verification** issue on
-   `HANCORE-linux/omarchy-plugin-marketplace` (template `verify-plugin.yml`),
-   choosing *Verify and publish a newer upstream commit*, and supply the
-   plugin ID (`halmylyseas.github-status`), the repository root URL, and the
-   full 40-character SHA of the pushed `HEAD`.
-4. Validation and the Automated Security Baseline re-run against that exact
-   commit (`SECURITY.md`'s "exact-SHA binding" — a later push invalidates
-   the recorded validation); a maintainer's `approved-and-verified` replaces
-   the listed snapshot.
+## Credits
 
-Until that lands, the listing shows *Update unverified* against a newer
-`master` — harmless, but **do not push to `master` mid-review of a pending
-submission or verification issue**, since approval is bound to the commit
-that was actually validated. Editing an open issue (not creating a new one)
-re-runs the bot's checks — never open a second `[Plugin]:`/verification
-issue for the same plugin.
+Author: HalmyLyseas.
