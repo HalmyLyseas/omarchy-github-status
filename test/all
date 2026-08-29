@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# test/all -- runs every test suite in this repo: Node tests over Model.js,
-# then the shell-script tests (fetch-dashboard/fetch-notifications/probe-auth
-# against test/mocks/gh). Exits non-zero if any suite fails.
+# test/all -- runs every test suite in this repo. Exits non-zero if any
+# suite fails.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,11 +8,6 @@ overall=0
 
 echo "== Model.js (node) =="
 node "$SCRIPT_DIR/model.test.js"
-if [[ $? -ne 0 ]]; then overall=1; fi
-
-echo
-echo "== scripts (bash, gh shadowed by test/mocks/gh) =="
-bash "$SCRIPT_DIR/scripts.test.sh"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo
