@@ -15,7 +15,7 @@ From the bar, the user can see at a glance and in one click:
 4. Their own open issues, with a Subscribed/All toggle.
 5. Activity across their own repos: latest commit, open issues/PRs, latest
    release.
-6. Click any item → it opens on github.com in the browser.
+6. Click any item → it opens on github.com and closes the popup.
 
 Done means: all six work live on this machine, `omarchy plugin validate`
 passes, `bash test/all` passes, and the repo is submission-ready for the

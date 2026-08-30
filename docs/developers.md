@@ -217,10 +217,10 @@ ready to ship.
   `bar`/`shell`, plus the real `Service.qml` against the same mock `gh`.
   Covers rendered section counts vs. the fixture, `"N of T"` pills, the
   degraded ladder (including the non-severe "untested gh version" hint),
-  the partial-dashboard surface, live search narrowing, fold/unfold against
-  the actual rendered tree, the `svc` null→new-instance lifecycle (zero
-  TypeErrors), and the `openUrl` allowlist (a non-github URL never reaches
-  the PATH-shadowed `xdg-open` mock).
+  the partial-dashboard surface, search narrowing with match-driven temporary
+  expansion and manual-layout restoration, fold/unfold against the rendered
+  tree, the `svc` null→new-instance lifecycle (zero TypeErrors), and item
+  navigation (rejected URLs stay open; one safe argv handoff closes the popup).
 - `omarchy plugin validate .` and qmllint on every `.qml` file must show 0
   errors before a commit that touches QML.
 
