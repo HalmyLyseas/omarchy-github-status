@@ -281,7 +281,7 @@ check_no_orphans "$mocklog" "partial"
 check_exit_status "partial"
 
 echo
-echo "== (4) search: searchQuery narrows every filtered list, pill follows (no \"of T\" while searching) =="
+echo "== (4) search: matching sections temporarily expand; manual layout returns after clearing =="
 log="$(run_scenario search search GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
 json="$(json_line "$log")"
 mocklog="$OUT_DIR/search.mock.log"
@@ -289,6 +289,10 @@ if [[ -z "$json" ]]; then
   not_ok "search: probe printed a PROBE_RESULT line"; cat "$log"
 else
   ok "search: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" allInitiallyManualCollapsed)" == "true" ]] && ok "search: all five manual states start folded" \
+    || not_ok "search: all five manual states start folded"
+  [[ "$(field "$json" allInitiallyHidden)" == "true" ]] && ok "search: all five bodies start hidden" \
+    || not_ok "search: all five bodies start hidden"
   [[ "$(field "$json" beforeReposLength)" == "7" ]] && ok "search: before query, filteredRepos.length===7" \
     || not_ok "search: before query, filteredRepos.length===7 (got: $(field "$json" beforeReposLength))"
   [[ "$(field "$json" beforePill)" == "7 of 45" ]] && ok "search: before query, Repositories pill reads \"7 of 45\"" \
@@ -301,6 +305,14 @@ else
     || not_ok "search: \"vandal\" narrows filteredOpenPRs to 0 (got: $(field "$json" afterOpenPRsLength))"
   [[ "$(field "$json" afterPill)" == "2" ]] && ok "search: Repositories pill follows to \"2\", no \"of T\" while searching" \
     || not_ok "search: Repositories pill follows to \"2\" (got: $(field "$json" afterPill))"
+  [[ "$(field "$json" vandalHeadersAgree)" == "true" ]] && ok "search: vandal headers and body visibility agree for all sections" \
+    || not_ok "search: vandal headers and body visibility agree for all sections"
+  [[ "$(field "$json" recomputedDistribution)" == "true" ]] && ok "search: nujabes recomputes the matching-section expansion" \
+    || not_ok "search: nujabes recomputes the matching-section expansion"
+  [[ "$(field "$json" manualChangeStayedOverridden)" == "true" ]] && ok "search: active-search click preserves manual state but does not override matches" \
+    || not_ok "search: active-search click preserves manual state but does not override matches"
+  [[ "$(field "$json" restoredManualLayout)" == "true" ]] && ok "search: clearing restores the preserved five-section manual layout" \
+    || not_ok "search: clearing restores the preserved five-section manual layout"
 fi
 check_no_engine_errors "$log" "search"
 check_no_orphans "$mocklog" "search"

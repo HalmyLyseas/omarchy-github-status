@@ -124,6 +124,15 @@ Panel {
   readonly property var filteredMyIssues: root.filterList(root.myIssues)
   readonly property var filteredRepos: root.filterList(root.repos)
 
+  // Search temporarily owns what is visible: each section with a match opens,
+  // and each zero-match section closes. The manual flags stay untouched, so
+  // clearing the query restores precisely the layout from before the search.
+  readonly property bool inboxEffectivelyCollapsed: root.searchActive ? root.filteredNotifications.length === 0 : root.inboxCollapsed
+  readonly property bool reviewRequestsEffectivelyCollapsed: root.searchActive ? root.filteredReviewRequests.length === 0 : root.reviewRequestsCollapsed
+  readonly property bool openPRsEffectivelyCollapsed: root.searchActive ? root.filteredOpenPRs.length === 0 : root.openPRsCollapsed
+  readonly property bool myIssuesEffectivelyCollapsed: root.searchActive ? root.filteredMyIssues.length === 0 : root.myIssuesCollapsed
+  readonly property bool repoActivityEffectivelyCollapsed: root.searchActive ? root.filteredRepos.length === 0 : root.repoActivityCollapsed
+
   // "…" pill state, per-source rather than the blended svc.lastSyncMs:
   // both pollers can race on a cold start, so gating every section on
   // whichever finishes first could show a false confirmed-"0" on the other.
@@ -453,7 +462,7 @@ Panel {
               // every other section's "reflect what's on screen" rule.
               count: root.searchActive ? root.filteredNotifications.length : (svc ? (Number(svc.unreadCount) || 0) : 0)
               synced: root.notifSynced
-              collapsed: root.inboxCollapsed
+              collapsed: root.inboxEffectivelyCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
               onToggled: root.inboxCollapsed = !root.inboxCollapsed
@@ -462,7 +471,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(4)
-              visible: !root.inboxCollapsed
+              visible: !root.inboxEffectivelyCollapsed
 
               Repeater {
                 model: root.filteredNotifications
@@ -490,7 +499,7 @@ Panel {
               // length only then, never "N of T" against the unfiltered total.
               total: root.searchActive ? 0 : (svc ? (Number(svc.reviewRequestsTotal) || 0) : 0)
               synced: root.dashboardSynced
-              collapsed: root.reviewRequestsCollapsed
+              collapsed: root.reviewRequestsEffectivelyCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
               onToggled: root.reviewRequestsCollapsed = !root.reviewRequestsCollapsed
@@ -499,7 +508,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(4)
-              visible: !root.reviewRequestsCollapsed
+              visible: !root.reviewRequestsEffectivelyCollapsed
 
               Repeater {
                 model: root.filteredReviewRequests
@@ -529,7 +538,7 @@ Panel {
               // search-suppression rule.
               total: root.searchActive ? 0 : (svc ? (Number(svc.openPRsTotal) || 0) : 0)
               synced: root.dashboardSynced
-              collapsed: root.openPRsCollapsed
+              collapsed: root.openPRsEffectivelyCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
               onToggled: root.openPRsCollapsed = !root.openPRsCollapsed
@@ -538,7 +547,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(4)
-              visible: !root.openPRsCollapsed
+              visible: !root.openPRsEffectivelyCollapsed
 
               Repeater {
                 model: root.filteredOpenPRs
@@ -570,7 +579,7 @@ Panel {
               // search-suppression rule.
               total: root.searchActive ? 0 : (svc ? (Number(svc.myIssuesTotal) || 0) : 0)
               synced: root.dashboardSynced
-              collapsed: root.myIssuesCollapsed
+              collapsed: root.myIssuesEffectivelyCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
               onToggled: root.myIssuesCollapsed = !root.myIssuesCollapsed
@@ -596,7 +605,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(4)
-              visible: !root.myIssuesCollapsed
+              visible: !root.myIssuesEffectivelyCollapsed
 
               Repeater {
                 model: root.filteredMyIssues
@@ -628,7 +637,7 @@ Panel {
               // search-suppression rule.
               total: root.searchActive ? 0 : (svc ? (Number(svc.reposTotal) || 0) : 0)
               synced: root.dashboardSynced
-              collapsed: root.repoActivityCollapsed
+              collapsed: root.repoActivityEffectivelyCollapsed
               foreground: root.foreground
               fontFamily: root.fontFamily
               onToggled: root.repoActivityCollapsed = !root.repoActivityCollapsed
@@ -637,7 +646,7 @@ Panel {
             Column {
               width: parent.width
               spacing: Style.space(4)
-              visible: !root.repoActivityCollapsed
+              visible: !root.repoActivityEffectivelyCollapsed
 
               Repeater {
                 model: root.filteredRepos

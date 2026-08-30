@@ -18,7 +18,8 @@ From the bar you can see, at a glance and in one click:
   release, most-recently-pushed first, with an archived/fork/private status
   pill.
 - A live search field at the top of the panel filters every section as you
-  type.
+  type, temporarily expanding sections with matches and restoring your fold
+  layout when cleared.
 - Hover a PR or issue row to see who commented last and when.
 - Every section opens folded; click its header to expand or collapse it.
 - Click any item to open it on github.com in your browser and close the popup.
@@ -46,9 +47,11 @@ From the bar you can see, at a glance and in one click:
 - **Search** — a live filter field at the top of the panel. Type anything
   and every section (notifications, PRs, review requests, issues, repos)
   narrows to matching title/repo/owner/name in place; count pills reflect
-  what's actually shown while you search. Esc clears the query first, then
-  closes the panel on a second press; a clear (✕) button is always
-  available too.
+  what's actually shown while you search. Matching sections temporarily
+  expand while zero-match sections stay folded; clearing the query restores
+  the layout you had before searching. Esc clears the query first, then
+  closes the panel on a second press; a clear (✕) button is always available
+  too.
 - **Last commenter on hover** — hover a PR, review-request, or issue row to
   see who commented last and how long ago, when there's a comment to show.
 - **Folded sections** — every panel session starts with all sections folded.

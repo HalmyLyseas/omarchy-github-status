@@ -257,23 +257,112 @@ ShellRoot {
     })
   }
 
-  // (4) search: root.searchQuery narrows every filtered list; a rendered
-  // pill follows the narrowed count and drops "N of T" while active.
+  // (4) search: matching sections temporarily open while zero-match ones
+  // stay folded; manual fold state survives the search and its clearing.
   function scenarioSearch() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
+    p.open()
+    _waitUntil(function() { return p.opened === true }, 3000, function(timedOut) {
+      if (timedOut) { finish("panel did not open for search scenario"); return }
+      verifySearchSession(p)
+    })
+  }
+
+  function verifySearchSession(p) {
     var content = p._debugContentItem
-    var reposHeader = findByProp(content, "text", "REPOSITORIES")
+    var sections = [
+      { label: "INBOX", state: "inboxCollapsed", effective: "inboxEffectivelyCollapsed" },
+      { label: "REVIEW REQUESTS", state: "reviewRequestsCollapsed", effective: "reviewRequestsEffectivelyCollapsed" },
+      { label: "MY OPEN PULL REQUESTS", state: "openPRsCollapsed", effective: "openPRsEffectivelyCollapsed" },
+      { label: "MY OPEN ISSUES", state: "myIssuesCollapsed", effective: "myIssuesEffectivelyCollapsed" },
+      { label: "REPOSITORIES", state: "repoActivityCollapsed", effective: "repoActivityEffectivelyCollapsed" }
+    ]
+    var headers = []
+    var rows = []
+    var allInitiallyManualCollapsed = true
+    var allInitiallyHidden = true
+    for (var i = 0; i < sections.length; i++) {
+      headers[i] = findByProp(content, "text", sections[i].label)
+      rows[i] = sectionRows(headers[i])
+      allInitiallyManualCollapsed = allInitiallyManualCollapsed && p[sections[i].state] === true
+      allInitiallyHidden = allInitiallyHidden && rows[i] && rows[i].visible === false
+    }
+    var reposHeader = headers[4]
     var beforeReposLength = p.filteredRepos.length
     var beforePill = reposHeader ? reposHeader.pillLabel : null
     p.searchQuery = "vandal"
-    finish("", {
-      beforeReposLength: beforeReposLength,
-      beforePill: beforePill,
-      afterReposLength: p.filteredRepos.length,
-      afterIssuesLength: p.filteredMyIssues.length,
-      afterOpenPRsLength: p.filteredOpenPRs.length,
-      afterPill: reposHeader ? reposHeader.pillLabel : null
+    _waitUntil(function() {
+      return p.repoActivityEffectivelyCollapsed === false
+        && p.myIssuesEffectivelyCollapsed === false
+        && p.openPRsEffectivelyCollapsed === true
+        && rows[4].visible === true
+        && rows[3].visible === true
+        && rows[2].visible === false
+    }, 3000, function(timedOut) {
+      if (timedOut) { finish("search did not apply the vandal match distribution"); return }
+      var vandalHeadersAgree = true
+      var vandalExpected = [true, true, true, false, false]
+      for (var j = 0; j < sections.length; j++) {
+        vandalHeadersAgree = vandalHeadersAgree
+          && headers[j] && headers[j].collapsed === vandalExpected[j]
+          && rows[j] && rows[j].visible === !vandalExpected[j]
+      }
+      var afterReposLength = p.filteredRepos.length
+      var afterIssuesLength = p.filteredMyIssues.length
+      var afterOpenPRsLength = p.filteredOpenPRs.length
+      var afterPill = reposHeader ? reposHeader.pillLabel : null
+
+      p.searchQuery = "nujabes"
+      _waitUntil(function() {
+        return p.openPRsEffectivelyCollapsed === false
+          && rows[2].visible === true
+          && rows[3].visible === true
+          && rows[4].visible === true
+          && rows[0].visible === false
+          && rows[1].visible === false
+      }, 3000, function(recomputeTimedOut) {
+        if (recomputeTimedOut) { finish("search did not recompute for nujabes"); return }
+        var recomputedDistribution = headers[2] && headers[2].collapsed === false
+          && headers[3] && headers[3].collapsed === false
+          && headers[4] && headers[4].collapsed === false
+          && headers[0] && headers[0].collapsed === true
+          && headers[1] && headers[1].collapsed === true
+
+        // A click during active search changes only the preserved manual
+        // layout. Inbox remains hidden because it has no matching rows.
+        headers[0].toggled()
+        var manualChangeStayedOverridden = p.inboxCollapsed === false
+          && p.inboxEffectivelyCollapsed === true
+          && rows[0].visible === false
+        p.searchQuery = ""
+        _waitUntil(function() {
+          return p.searchActive === false && rows[0].visible === true
+        }, 3000, function(clearTimedOut) {
+          if (clearTimedOut) { finish("clearing search did not restore manual layout"); return }
+          var restoredManualLayout = rows[0].visible === true
+          for (var k = 1; k < sections.length; k++) {
+            restoredManualLayout = restoredManualLayout
+              && p[sections[k].state] === true
+              && p[sections[k].effective] === true
+              && rows[k].visible === false
+          }
+          finish("", {
+            allInitiallyManualCollapsed: allInitiallyManualCollapsed,
+            allInitiallyHidden: allInitiallyHidden,
+            beforeReposLength: beforeReposLength,
+            beforePill: beforePill,
+            afterReposLength: afterReposLength,
+            afterIssuesLength: afterIssuesLength,
+            afterOpenPRsLength: afterOpenPRsLength,
+            afterPill: afterPill,
+            vandalHeadersAgree: vandalHeadersAgree,
+            recomputedDistribution: recomputedDistribution,
+            manualChangeStayedOverridden: manualChangeStayedOverridden,
+            restoredManualLayout: restoredManualLayout
+          })
+        })
+      })
     })
   }
 
