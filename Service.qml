@@ -99,9 +99,10 @@ Item {
   function openUrl(url) {
     if (!Model.isSafeGithubUrl(url)) {
       log("openUrl: rejected non-github.com url")
-      return
+      return false
     }
     Quickshell.execDetached(["xdg-open", url])
+    return true
   }
 
   // Persists issuesFilter via shell.updateEntryInline, which REPLACES the

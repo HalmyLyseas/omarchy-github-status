@@ -17,6 +17,8 @@ ShellRoot {
 
   property var barWidget: null
   property var svc: null
+  property bool openItemRejectedStayedOpen: false
+  property bool openItemClosedAfterValid: false
 
   function panel() { return barWidget ? barWidget._debugPanelItem : null }
 
@@ -275,24 +277,86 @@ ShellRoot {
     })
   }
 
-  // (5) fold: root.openPRsCollapsed hides the section's row-list Column --
-  // proven against the actual rendered tree, not just the backing boolean.
+  // (5) fold: every section opens folded, expands through its own header,
+  // and returns to folded when the popup reopens.
   function scenarioFold() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
+    p.open()
+    _waitUntil(function() { return p.opened === true }, 3000, function(timedOut) {
+      if (timedOut) { finish("panel did not open for fold scenario"); return }
+      verifyFoldSession(p)
+    })
+  }
+
+  function verifyFoldSession(p) {
     var content = p._debugContentItem
-    var header = findByProp(content, "text", "MY OPEN PULL REQUESTS")
-    var rows = sectionRows(header)
-    var visibleBefore = rows ? rows.visible : null
-    p.openPRsCollapsed = true
-    var visibleAfterCollapse = rows ? rows.visible : null
-    p.openPRsCollapsed = false
-    var visibleAfterExpand = rows ? rows.visible : null
-    finish("", {
-      foundRows: rows !== null,
-      visibleBefore: visibleBefore,
-      visibleAfterCollapse: visibleAfterCollapse,
-      visibleAfterExpand: visibleAfterExpand
+    var sections = [
+      { label: "INBOX", state: "inboxCollapsed" },
+      { label: "REVIEW REQUESTS", state: "reviewRequestsCollapsed" },
+      { label: "MY OPEN PULL REQUESTS", state: "openPRsCollapsed" },
+      { label: "MY OPEN ISSUES", state: "myIssuesCollapsed" },
+      { label: "REPOSITORIES", state: "repoActivityCollapsed" }
+    ]
+    var headers = []
+    var rows = []
+    var allFound = true
+    var allInitiallyCollapsed = true
+    var allInitiallyHidden = true
+    var everyHeaderFoldable = true
+    var eachExpandsOnlyOwnBody = true
+    for (var i = 0; i < sections.length; i++) {
+      headers[i] = findByProp(content, "text", sections[i].label)
+      rows[i] = sectionRows(headers[i])
+      allFound = allFound && headers[i] !== null && rows[i] !== null
+      allInitiallyCollapsed = allInitiallyCollapsed && p[sections[i].state] === true
+      allInitiallyHidden = allInitiallyHidden && rows[i] && rows[i].visible === false
+      everyHeaderFoldable = everyHeaderFoldable && headers[i] && headers[i].foldAffordanceVisible === true
+    }
+    // An empty, unsynced header must retain its affordance too.
+    if (headers[0]) {
+      headers[0].synced = false
+      headers[0].count = 0
+      everyHeaderFoldable = everyHeaderFoldable && headers[0].foldAffordanceVisible === true
+    }
+    for (var j = 0; j < sections.length; j++) {
+      headers[j].toggled()
+      for (var k = 0; k < sections.length; k++) {
+        eachExpandsOnlyOwnBody = eachExpandsOnlyOwnBody && rows[k].visible === (j === k)
+      }
+      headers[j].toggled()
+    }
+    var issuesChip = findByProp(headers[3], "text", "SUBSCRIBED")
+    var chipKeepsIssuesFolded = issuesChip !== null
+    if (issuesChip) {
+      var issuesCollapsedBeforeChip = p.myIssuesCollapsed
+      issuesChip.clicked()
+      chipKeepsIssuesFolded = p.myIssuesCollapsed === issuesCollapsedBeforeChip
+    }
+    for (var n = 0; n < sections.length; n++) p[sections[n].state] = false
+    p.close()
+    _waitUntil(function() { return p.opened === false }, 3000, function(closeTimedOut) {
+      if (closeTimedOut) { finish("panel did not close for fold reset"); return }
+      p.open()
+      _waitUntil(function() { return p.opened === true }, 3000, function(openTimedOut) {
+        if (openTimedOut) { finish("panel did not reopen for fold reset"); return }
+        var resetCollapsed = true
+        var resetHidden = true
+        for (var m = 0; m < sections.length; m++) {
+          resetCollapsed = resetCollapsed && p[sections[m].state] === true
+          resetHidden = resetHidden && rows[m].visible === false
+        }
+        finish("", {
+          allFound: allFound,
+          allInitiallyCollapsed: allInitiallyCollapsed,
+          allInitiallyHidden: allInitiallyHidden,
+          everyHeaderFoldable: everyHeaderFoldable,
+          eachExpandsOnlyOwnBody: eachExpandsOnlyOwnBody,
+          chipKeepsIssuesFolded: chipKeepsIssuesFolded,
+          resetCollapsed: resetCollapsed,
+          resetHidden: resetHidden
+        })
+      })
     })
   }
 
@@ -333,13 +397,20 @@ ShellRoot {
     })
   }
 
-  // (7) openItem allowlist: a non-github URL is refused before it ever
-  // reaches xdg-open -- the mock (PATH-shadowed) logs nothing.
+  // (7) openItem keeps the popup open for a rejection, then closes it only
+  // after the service starts the safe, fixed-argv browser handoff.
   function scenarioOpenItem() {
     var p = panel()
     if (!p) { finish("no panel instance"); return }
-    p.openItem("https://evil.example.com/x")
-    readLogTimer.start()
+    p.open()
+    _waitUntil(function() { return p.opened === true }, 3000, function(timedOut) {
+      if (timedOut) { finish("panel did not open for openItem scenario"); return }
+      p.openItem("https://evil.example.com/x")
+      probeRoot.openItemRejectedStayedOpen = p.opened === true
+      p.openItem("https://github.com/o/r/issues/1")
+      probeRoot.openItemClosedAfterValid = p.opened === false
+      readLogTimer.start()
+    })
   }
 
   Timer {
@@ -355,7 +426,15 @@ ShellRoot {
     running: false
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: probeRoot.finish("", { xdgOpenLogEmpty: text.trim().length === 0 })
+      onStreamFinished: {
+        var lines = text.trim() ? text.trim().split("\n") : []
+        probeRoot.finish("", {
+          rejectedStayedOpen: probeRoot.openItemRejectedStayedOpen,
+          closedAfterValid: probeRoot.openItemClosedAfterValid,
+          xdgOpenCount: lines.length,
+          validArgvOnly: lines.length === 1 && lines[0].indexOf("ARGV: https://github.com/o/r/issues/1") >= 0
+        })
+      }
     }
   }
 

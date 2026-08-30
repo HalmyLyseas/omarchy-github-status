@@ -55,23 +55,23 @@ Panel {
   readonly property bool searchActive: root.searchQuery.trim() !== ""
 
   // Per-section fold state, session-only, deliberately not persisted to
-  // shell.json -- same reset-on-open treatment as searchQuery.
-  property bool inboxCollapsed: false
-  property bool reviewRequestsCollapsed: false
-  property bool openPRsCollapsed: false
-  property bool myIssuesCollapsed: false
-  property bool repoActivityCollapsed: false
+  // shell.json. Every new panel session begins collapsed.
+  property bool inboxCollapsed: true
+  property bool reviewRequestsCollapsed: true
+  property bool openPRsCollapsed: true
+  property bool myIssuesCollapsed: true
+  property bool repoActivityCollapsed: true
 
   onOpenedChanged: if (opened) {
     root.nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
     root.searchQuery = ""
     if (searchField) searchField.text = ""
-    root.inboxCollapsed = false
-    root.reviewRequestsCollapsed = false
-    root.openPRsCollapsed = false
-    root.myIssuesCollapsed = false
-    root.repoActivityCollapsed = false
+    root.inboxCollapsed = true
+    root.reviewRequestsCollapsed = true
+    root.openPRsCollapsed = true
+    root.myIssuesCollapsed = true
+    root.repoActivityCollapsed = true
   }
 
   // Model.matchesQuery(item, query) is the data-layer's contract, guarded
@@ -147,7 +147,7 @@ Panel {
   }
 
   function openItem(url) {
-    if (svc && typeof svc.openUrl === "function" && url) svc.openUrl(url)
+    if (svc && typeof svc.openUrl === "function" && url && svc.openUrl(url) === true) root.close()
   }
 
   function refreshNow() {

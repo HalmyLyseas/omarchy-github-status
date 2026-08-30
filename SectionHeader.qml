@@ -24,13 +24,12 @@ Item {
   // from outside this file (`pillText` is a local id) -- see
   // test/probe/ui-probe.qml.
   readonly property alias pillLabel: pillText.text
+  readonly property bool foldAffordanceVisible: foldHoverBg.visible && foldArea.enabled && chevron.visible
 
   signal toggled()
 
-  // Zero-count sections keep the old auto-fold behavior (they already
-  // render header-only -- nothing to toggle); an unsynced "…" header isn't
-  // clickable either, since its count isn't real yet.
-  readonly property bool clickable: root.synced && root.count > 0
+  // Every section can be folded, even while its count is zero or unsynced.
+  readonly property bool clickable: true
 
   width: parent ? parent.width : 0
   implicitHeight: Math.max(
@@ -71,9 +70,7 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
   }
 
-  // "Folded" indicator -- absent entirely (not just invisible) when the
-  // header isn't clickable, so an empty/unsynced section reads as header +
-  // pill only; a folded populated section reads distinctly ("▸" vs "▾").
+  // The chevron reflects the current fold state for every section.
   Text {
     id: chevron
     visible: root.clickable

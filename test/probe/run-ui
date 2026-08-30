@@ -307,7 +307,7 @@ check_no_orphans "$mocklog" "search"
 check_exit_status "search"
 
 echo
-echo "== (5) fold: collapsed toggles hide the section's row-list Column =="
+echo "== (5) fold: all sections start folded, remain foldable, and reset on reopen =="
 log="$(run_scenario fold fold GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
 json="$(json_line "$log")"
 mocklog="$OUT_DIR/fold.mock.log"
@@ -315,14 +315,21 @@ if [[ -z "$json" ]]; then
   not_ok "fold: probe printed a PROBE_RESULT line"; cat "$log"
 else
   ok "fold: probe printed a PROBE_RESULT line"
-  [[ "$(field "$json" foundRows)" == "true" ]] && ok "fold: found the PR section's row-list Column in the rendered tree" \
-    || not_ok "fold: found the PR section's row-list Column in the rendered tree"
-  [[ "$(field "$json" visibleBefore)" == "true" ]] && ok "fold: rows visible before collapsing" \
-    || not_ok "fold: rows visible before collapsing (got: $(field "$json" visibleBefore))"
-  [[ "$(field "$json" visibleAfterCollapse)" == "false" ]] && ok "fold: rows hidden after collapsing" \
-    || not_ok "fold: rows hidden after collapsing (got: $(field "$json" visibleAfterCollapse))"
-  [[ "$(field "$json" visibleAfterExpand)" == "true" ]] && ok "fold: rows visible again after expanding" \
-    || not_ok "fold: rows visible again after expanding (got: $(field "$json" visibleAfterExpand))"
+  [[ "$(field "$json" allFound)" == "true" ]] && ok "fold: found all five section row-list Columns" \
+    || not_ok "fold: found all five section row-list Columns"
+  [[ "$(field "$json" allInitiallyCollapsed)" == "true" ]] && ok "fold: all five backing states start collapsed" \
+    || not_ok "fold: all five backing states start collapsed"
+  [[ "$(field "$json" allInitiallyHidden)" == "true" ]] && ok "fold: all five row-list Columns start hidden" \
+    || not_ok "fold: all five row-list Columns start hidden"
+  [[ "$(field "$json" everyHeaderFoldable)" == "true" ]] && ok "fold: every header stays foldable, including empty/unsynced" \
+    || not_ok "fold: every header stays foldable, including empty/unsynced"
+  [[ "$(field "$json" eachExpandsOnlyOwnBody)" == "true" ]] && ok "fold: each header expands only its own body" \
+    || not_ok "fold: each header expands only its own body"
+  [[ "$(field "$json" chipKeepsIssuesFolded)" == "true" ]] && ok "fold: My Issues filter chip does not toggle its section" \
+    || not_ok "fold: My Issues filter chip does not toggle its section"
+  [[ "$(field "$json" resetCollapsed)" == "true" && "$(field "$json" resetHidden)" == "true" ]] \
+    && ok "fold: close/reopen restores all sections to folded" \
+    || not_ok "fold: close/reopen restores all sections to folded"
 fi
 check_no_engine_errors "$log" "fold"
 check_no_orphans "$mocklog" "fold"
@@ -349,7 +356,7 @@ check_no_orphans "$mocklog" "lifecycle"
 check_exit_status "lifecycle"
 
 echo
-echo "== (7) openItem allowlist: a non-github URL never reaches xdg-open =="
+echo "== (7) openItem: rejection stays open; safe argv launch closes popup =="
 log="$(run_scenario openitem openitem GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_GH")"
 json="$(json_line "$log")"
 mocklog="$OUT_DIR/openitem.mock.log"
@@ -357,8 +364,14 @@ if [[ -z "$json" ]]; then
   not_ok "openitem: probe printed a PROBE_RESULT line"; cat "$log"
 else
   ok "openitem: probe printed a PROBE_RESULT line"
-  [[ "$(field "$json" xdgOpenLogEmpty)" == "true" ]] && ok "openitem: mock xdg-open recorded no invocation" \
-    || not_ok "openitem: mock xdg-open recorded no invocation (got log contents non-empty)"
+  [[ "$(field "$json" rejectedStayedOpen)" == "true" ]] && ok "openitem: rejected URL leaves popup open" \
+    || not_ok "openitem: rejected URL leaves popup open"
+  [[ "$(field "$json" closedAfterValid)" == "true" ]] && ok "openitem: safe handoff closes popup" \
+    || not_ok "openitem: safe handoff closes popup"
+  [[ "$(field "$json" xdgOpenCount)" == "1" ]] && ok "openitem: mock xdg-open records exactly one call" \
+    || not_ok "openitem: mock xdg-open records exactly one call (got: $(field "$json" xdgOpenCount))"
+  [[ "$(field "$json" validArgvOnly)" == "true" ]] && ok "openitem: only the valid GitHub URL reaches fixed argv" \
+    || not_ok "openitem: only the valid GitHub URL reaches fixed argv"
 fi
 check_no_engine_errors "$log" "openitem"
 check_no_orphans "$mocklog" "openitem"

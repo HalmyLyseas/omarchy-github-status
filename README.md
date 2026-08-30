@@ -20,8 +20,8 @@ From the bar you can see, at a glance and in one click:
 - A live search field at the top of the panel filters every section as you
   type.
 - Hover a PR or issue row to see who commented last and when.
-- Click any populated section header to fold it out of the way.
-- Click any item to open it on github.com in your browser.
+- Every section opens folded; click its header to expand or collapse it.
+- Click any item to open it on github.com in your browser and close the popup.
 
 ## Features
 
@@ -51,11 +51,10 @@ From the bar you can see, at a glance and in one click:
   available too.
 - **Last commenter on hover** — hover a PR, review-request, or issue row to
   see who commented last and how long ago, when there's a comment to show.
-- **Fold sections you don't need** — click any populated section header to
-  collapse it to just its title and count for the rest of the session (it
-  reopens the next time you open the panel). A small chevron next to the
-  header text tells you it's collapsible; empty sections have no chevron
-  since they're already as compact as they get.
+- **Folded sections** — every panel session starts with all sections folded.
+  Click any section header, including an empty or still-loading one, to
+  expand or collapse it; its chevron shows the current state. All sections
+  return to folded when the panel reopens.
 - **Status pills everywhere** — every section header carries a right-aligned
   count pill (unread count for Inbox, rendered/filtered-list length
   elsewhere), and a section with nothing in it folds to just that header
@@ -95,8 +94,9 @@ The GitHub glyph appears in the bar's right section.
 
 Click the bar icon to open the panel. It refreshes automatically in the
 background; the hero row also has a manual refresh button for "check right
-now." Click any notification, PR, review request, or repo row to open it on
-github.com in your default browser.
+now." Sections start folded; click a header to inspect its rows. Click any
+notification, PR, review request, issue, or repo row to open it on github.com
+in your default browser; the popup then closes.
 
 ## Settings
 
