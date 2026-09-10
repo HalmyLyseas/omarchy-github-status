@@ -207,8 +207,11 @@ Item {
   onConfigPathChanged: if (root.scopedHost) Qt.callLater(root.refreshScopedSettings)
 
   // The host injects `shell` after creation, so the ready line below logs
-  // pre-injection defaults; the effective values are logged here instead.
-  onSettingsEntryChanged: {
+  // pre-injection defaults; the effective values are logged here instead,
+  // deferred so the derived settings bindings have re-evaluated first.
+  onSettingsEntryChanged: Qt.callLater(root.logSettingsApplied)
+
+  function logSettingsApplied() {
     if (!root.shell) return
     log("settings applied (source=" + root.settingsSource
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
