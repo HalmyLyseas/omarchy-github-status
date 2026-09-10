@@ -16,8 +16,14 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
   the user's own screen and, on click, github.com in the browser).
 - **Truthfulness of the status/attention icon.** The bar glyph's urgent
   recolor and the panel's status ladder (`ok`/`loading`/`no-gh`/
-  `unauthenticated`/`offline`/`rate-limited`) must never claim a state GitHub
-  itself does not actually report.
+  `unauthenticated`/`offline`/`rate-limited`/`api-error`) must never claim a
+  state GitHub itself does not actually report: a GitHub-side error (an
+  HTTP 5xx, an exit-0 malformed body, or the plugin's own output cap
+  cutting off a real response) is shown as a GitHub API error, with the
+  HTTP status or a `"response too large"` detail when known — never
+  folded into `offline`. The reverse also holds: a watchdog timeout means
+  `gh` never actually answered, so it is reported as `offline`, never as
+  a GitHub-side API error.
 
 ## Trust boundaries and their guard
 

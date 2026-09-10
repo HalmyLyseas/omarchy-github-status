@@ -65,8 +65,11 @@ From the bar you can see, at a glance and in one click:
   pill (archived wins when more than one applies); PR/issue/inbox rows for a
   repo you don't own get a small pill naming the external owner.
 - **Graceful degradation** — if `gh` isn't installed, isn't signed in, the
-  network is down, or you're rate-limited, the panel says so plainly and
-  keeps showing your last-known-good data instead of going blank.
+  network is down, you're rate-limited, or GitHub itself answers with an
+  error, the panel says so plainly and keeps showing your last-known-good
+  data instead of going blank. A GitHub-side error is reported as a GitHub
+  API error with the HTTP status when known, distinct from being offline;
+  the bar icon shows a small status dot for any of these status states.
 
 ## Requirements
 

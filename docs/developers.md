@@ -10,20 +10,19 @@ carries the security model.
 |---|---|
 | `manifest.json` | Kinds `["service", "bar-widget"]`, `keepLoaded: true`. `entryPoints.service` is `Service.qml`, `entryPoints.barWidget` is `BarWidget.qml`. |
 | `Service.qml` | All state and every `gh` `Process`: the ghPath resolver, the auth probe, the dashboard poller, the notifications poller. **Instantiated exactly once, machine-wide**, by `shell.ensureService()` the first time any bar widget or panel resolves it. |
-| `BarWidget.qml` | The bar-slot entry point (one instance per monitor). Resolves the singleton via `shell.serviceFor("halmylyseas.github-status")`, always null-guarded — the bar paints before the service resolves. Owns the button + icon/count-pill, and hosts `Panel.qml` through an eager `Loader` (`active: true`). |
+| `BarWidget.qml` | The bar-slot entry point (one instance per monitor). Resolves the singleton via `shell.serviceFor("halmylyseas.github-status")`, always null-guarded — the bar paints before the service resolves. Owns the button + icon/count-pill, a bottom-right status dot for a degraded `statusSeverity`, and hosts `Panel.qml` through an eager `Loader` (`active: true`). |
 | `Panel.qml` | The popup: Hero, search, then five independently-foldable sections (Inbox, Review requests, My open PRs, My open issues, Repositories). Each session opens with every section folded; state is local only. During an active search, matching sections temporarily expand and zero-match sections fold, then clearing restores the manual layout. Receives `bar`, `settings`, `anchorItem`, `hostWidget` from `BarWidget.injectPanel()` — it resolves `service` itself via the same `shell.serviceFor()` call. |
 | `Model.js` | Pure ES5 logic: `gh` JSON → UI-shape mapping functions, the URL allowlist, the failure classifier, field/list caps. No Quickshell imports, so plain Node can `require()` it (`test/model.test.js`). |
 | `SectionHeader.qml` | Shared section header: label, right-aligned count/`"N of T"`/`"…"` pill, optional `extra` slot (the My open issues Subscribed chip), click-to-fold. |
 
 ### Injection contract
 
-`BarWidget.qml` loads `Panel.qml` eagerly (`active: true`) and calls
-`injectPanel()` on every load and every change to `bar`/`settings`, handing
-over `bar`, `settings`, `anchorItem` (for `KeyboardPanel` positioning), and
-`hostWidget`. `Panel.qml` resolves `service` itself the same way rather than
-as a prop — both null-guard every `svc` read, since it may not have resolved
-yet, or the shell may destroy/recreate it if the registry transiently
-reports the plugin disabled at startup.
+`BarWidget.qml` loads `Panel.qml` eagerly (`active: true`) and calls `injectPanel()` on
+every load and every change to `bar`/`settings`, handing over `bar`, `settings`,
+`anchorItem` (for `KeyboardPanel` positioning), and `hostWidget`. `Panel.qml` resolves
+`service` itself the same way rather than as a prop — both null-guard every `svc` read,
+since it may not have resolved yet, or the shell may destroy/recreate it if the registry
+transiently reports the plugin disabled at startup.
 
 ### Settings sources
 
@@ -39,16 +38,15 @@ below). Either way the four derived settings (`dashboardIntervalSec`,
 
 Supports Omarchy 4.0.1 or later. 4.0.1/4.0.2 inject the host shell directly
 (`hasLegacyShellConfig`); 4.0.3 introduced a capability-scoped `PluginShellApi` facade
-instead (`scopedHost`, `shellConfig` undefined). The facade supports
-`shell.serviceFor(id)` and `shell.updateEntryInline(id, settings)` scoped to this
-plugin's own id, but its `barConfig` copy only refreshes on a
-plugin-list/widget-registry change, never an inline write — so `Service.qml` instead
-watches `configPath` (`~/.config/omarchy/shell.json`, capped 1 MiB), keeping only its
-own entry (`Model.ownEntryFromConfigText`). Startup never writes. Since
-`updateEntryInline` replaces the whole entry, `setIssuesFilter` re-reads `shell.json`
-with a blocking `FileView` right before a scoped write, closing the window between the
-last watched reload and the write, and refuses to write (and logs why) whenever the
-fresh entry is null rather than drop every sibling setting; `settingsDiagnostic` names
+instead (`scopedHost`, `shellConfig` undefined). The facade supports `shell.serviceFor(id)`
+and `shell.updateEntryInline(id, settings)` scoped to this plugin's own id, but its
+`barConfig` copy only refreshes on a plugin-list/widget-registry change, never an inline
+write — so `Service.qml` instead watches `configPath` (`~/.config/omarchy/shell.json`,
+capped 1 MiB), keeping only its own entry (`Model.ownEntryFromConfigText`). Startup never
+writes. Since `updateEntryInline` replaces the whole entry, `setIssuesFilter` re-reads
+`shell.json` with a blocking `FileView` right before a scoped write, closing the window
+between the last watched reload and the write, and refuses to write (and logs why) whenever
+the fresh entry is null rather than drop every sibling setting; `settingsDiagnostic` names
 the exact cause, logged once per change, never per poll.
 `test/probe/run-scoped-settings` drives the settings path through the installed facade
 with a host-style write callback; the host's own write behavior is pinned lexically by
@@ -91,19 +89,27 @@ line to the limit, sends `signal(15)`, and increments an overflow counter.
 
 ## Status ladder and re-probe rules
 
-`status` is `"ok" | "loading" | "no-gh" | "unauthenticated" | "offline" |
-"rate-limited"`, computed by `worstOf()` over a fixed severity order
-(`no-gh > unauthenticated > rate-limited > offline > loading > ok`).
-Three independent sources feed it — the auth probe, the dashboard and
-notifications pollers — each with its own `*Status`/`*LastSyncMs`/
-`*RateLimitedUntilMs`. Once `internal.pollersActive` is true, `probeStatus`
-is excluded: its only job is the initial "is `gh` usable" gate, and the
-real pollers' own signal is authoritative after. On any transition to
-`no-gh`/`unauthenticated`, both pollers stop (`pollersActive = false`)
-and `reProbeTimer` (5 min, probe-shortenable) arms; `handleProbeResult`'s
-success path clears a stale poller status back to `"loading"` — without
-this, mid-session recovery (`gh` reappearing, re-authenticating) would
-deadlock on a status nothing re-evaluates once set.
+`status` is `"ok" | "loading" | "no-gh" | "unauthenticated" | "offline" | "rate-limited"
+| "api-error"`, computed by `worstOf()` over a fixed severity order (`no-gh >
+unauthenticated > rate-limited > api-error > offline > loading > ok`). Three independent
+sources feed it — the auth probe, the dashboard and notifications pollers — each with
+its own `*Status`/`*LastSyncMs`/`*RateLimitedUntilMs`. Once `internal.pollersActive` is
+true, `probeStatus` is excluded: its only job is the initial "is `gh` usable" gate, and
+the real pollers' own signal is authoritative after. On any transition to
+`no-gh`/`unauthenticated`, both pollers stop (`pollersActive = false`) and
+`reProbeTimer` (5 min, probe-shortenable) arms; `handleProbeResult`'s success path
+clears a stale poller status back to `"loading"` — without this, mid-session recovery
+(`gh` reappearing, re-authenticating) would deadlock on a status nothing re-evaluates
+once set.
+
+`api-error` means GitHub (or `gh`) answered with an error — HTTP 5xx, an exit-0 malformed
+body, or an output-overflow kill (the plugin's own cap cut a real response short, detail
+`"response too large"`); `offline` covers connection-level failures and a watchdog timeout
+alike (no response in time, `gh` never actually answered). Polling behaves like `offline`
+either way: pollers keep retrying, last-good data stays. `apiErrorDetail` (built by
+`Model.apiErrorDetail`) is a capped, control-character-stripped per-source label
+(`"dashboard: HTTP 502"`, joined `" · "` across sources); `statusSeverity` (`"ok" | "info" |
+"warn" | "severe"`) collapses the ladder, driving the bar's status dot and the panel's hint.
 
 ## Partial-dashboard accounting
 
@@ -124,12 +130,11 @@ bound on every section's real freshness.
 
 ## CLI version pin
 
-`Model.SUPPORTED_GH_MAJORS` lists the gh CLI major versions this plugin has been tested
-against (matched on the leading segment: `2.98.0`/`2.0.0` both pin). `ghVersionProc`
-reads `gh --version` once per path resolution into
-`Service.ghVersion`/`ghVersionSupported`, adding a dim, non-severe status hint on an
-unsupported result — never blocking pollers or `status`. `test/cli-contract.mjs` fails
-loudly on an unpinned major.
+`Model.SUPPORTED_GH_MAJORS` lists the gh CLI major versions tested against (matched on
+the leading segment: `2.98.0`/`2.0.0` both pin). `ghVersionProc` reads `gh --version`
+once per path resolution into `Service.ghVersion`/`ghVersionSupported`, adding a dim,
+non-severe status hint on an unsupported result — never blocking pollers or `status`.
+`test/cli-contract.mjs` fails loudly on an unpinned major.
 
 ## Security invariants
 
@@ -143,18 +148,16 @@ loudly on an unpinned major.
   `test/qml-sinks.test.js`, see "Testing" below) — a hostile relay/title/
   headline can never render as rich text. `SafeToolTip` in `Panel.qml` is
   a drop-in `PanelToolTip` replacement that forces this.
-- **No disk cache of GitHub data.** Every list lives in QML memory only.
-  The one thing this plugin writes to disk is its own settings entry via
-  `bar.shell.updateEntryInline()`, which **replaces** the whole entry —
-  `Model.mergedSettings()` merges from the loaded `settingsEntry`, and a
-  null entry gets the write refused, not risked (see "Host compatibility").
+- **No disk cache of GitHub data.** Every list lives in QML memory only. The one disk
+  write is its settings entry, via `bar.shell.updateEntryInline()` — which **replaces**
+  the whole entry; `Model.mergedSettings()` merges from `settingsEntry`, refusing a
+  write when it's null (see "Host compatibility").
 
 ## Accepted risks
 
-- **The 1 MiB `shell.json` cap applies after the full read.** The
-  `FileView` already holds the whole file in memory before
-  `Model.ownEntryFromConfigText` rejects an oversized one, so a
-  same-user process placing a huge file there costs memory once, not
+- **The 1 MiB `shell.json` cap applies after the full read.** The `FileView` already
+  holds the whole file in memory before `Model.ownEntryFromConfigText` rejects an
+  oversized one, so a same-user process placing a huge file there costs memory once, not
   disk or a crash.
 - **`StdioCollector`/`SplitParser` buffer a line in full until its
   newline**, before this plugin's own char caps see a byte — accepted,
@@ -198,19 +201,20 @@ feature/hardening branch and lands on `master` only when ready to ship.
 - `test/host-contract.mjs` (Node, read-only) — fails loudly if the
   installed `PluginShellApi.qml` gains `shellConfig`, drops
   `serviceFor`/`updateEntryInline`, or the host stops whole-entry-replacing.
-- `test/probe/run` — a `qs -n -p` instance loading the real `Service.qml`
-  against `test/mocks/gh` (argv-driven), covering the full status ladder:
-  ok, unauthenticated/no-gh recovery, mid-session binary removal, offline,
-  rate-limited (real reset-header round-trip), a hung `gh`, a flooding
-  `gh`, a partial GraphQL envelope, a malformed notifications body, and an
-  unpinned `gh --version` major. Asserts no orphaned process, qs exit 0.
+- `test/probe/run` — a `qs -n -p` instance loading the real `Service.qml` against
+  `test/mocks/gh` (argv-driven), covering the full status ladder: ok,
+  unauthenticated/no-gh recovery, mid-session binary removal, offline, api-error (HTTP
+  5xx and malformed-body shapes, `apiErrorDetail` set and cleared on recovery),
+  rate-limited (real reset-header round-trip), a hung `gh`, a flooding `gh`, a partial
+  GraphQL envelope, a malformed notifications body, and an unpinned `gh --version`
+  major. Asserts no orphaned process, qs exit 0.
 - `test/probe/run-ui` — a second `qs -n -p` instance loading the real
-  `BarWidget.qml`/`Panel.qml` against a stub `bar`/`shell`, plus the real
-  `Service.qml` against the same mock `gh`. Covers rendered section
-  counts, `"N of T"` pills, the degraded ladder, the partial-dashboard
-  surface, search narrowing, fold/unfold, the `svc` null→new-instance
-  lifecycle, and item navigation (rejected URLs stay open; a safe handoff
-  closes the popup).
+  `BarWidget.qml`/`Panel.qml` against a stub `bar`/`shell`, plus the real `Service.qml`
+  against the same mock `gh`. Covers rendered section counts, `"N of T"` pills, the
+  degraded ladder including api-error's `statusSeverity`/status dot and `statusHint`
+  text, the partial-dashboard surface, search narrowing, fold/unfold, the `svc`
+  null→new-instance lifecycle, and item navigation (rejected URLs stay open; a safe
+  handoff closes the popup).
 - `test/probe/run-scoped-settings` — a third `qs -n -p` instance driving
   the real `PluginShellApi.qml`/`BarWidget.qml`/`Panel.qml` against a temp
   `shell.json`: seeded values, no boot write, the toggle round trip
