@@ -264,6 +264,18 @@ test("remapNotificationsExternal: re-derives isExternal from each item's own own
   assert.notStrictEqual(after, before)
 })
 
+test("remapNotificationsExternal: a login owning none of the items flags every one external (account switch)", function () {
+  var before = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "own repo", url: "" }, repository: { full_name: "HalmyLyseas/VandalHearts-PcPort" }, updated_at: "2026-01-01T00:00:00Z" },
+    { id: "2", unread: false, subject: { title: "external repo", url: "" }, repository: { full_name: "octocat/Hello-World" }, updated_at: "2026-01-02T00:00:00Z" }
+  ], "HalmyLyseas")
+  assert.strictEqual(before[0].isExternal, false, "owned by the original login before the switch")
+
+  var after = Model.remapNotificationsExternal(before, "SomeoneElse")
+  assert.strictEqual(after[0].isExternal, true, "now external under the switched-to login")
+  assert.strictEqual(after[1].isExternal, true)
+})
+
 test("remapNotificationsExternal: non-array / adversarial input never throws", function () {
   assert.deepStrictEqual(Model.remapNotificationsExternal(null, "x"), [])
   assert.deepStrictEqual(Model.remapNotificationsExternal(undefined, "x"), [])
@@ -1207,6 +1219,27 @@ test("apiErrorDetail: non-string input never throws", function () {
   assert.doesNotThrow(function () { Model.apiErrorDetail(42, "not a number") })
   assert.doesNotThrow(function () { Model.apiErrorDetail({}, null) })
   assert.strictEqual(Model.apiErrorDetail(null, 1), "request failed (exit 1)")
+})
+
+// -------------------------------------------------------------------- apiErrorSourceLabel
+
+test("apiErrorSourceLabel: maps the three known sources to their display labels", function () {
+  assert.strictEqual(Model.apiErrorSourceLabel("dashboard"), "dashboard")
+  assert.strictEqual(Model.apiErrorSourceLabel("notifications"), "notifications")
+  assert.strictEqual(Model.apiErrorSourceLabel("probe"), "sign-in check")
+})
+
+test("apiErrorSourceLabel: an unrecognized source passes through unchanged", function () {
+  assert.strictEqual(Model.apiErrorSourceLabel("something-else"), "something-else")
+  assert.strictEqual(Model.apiErrorSourceLabel(""), "")
+})
+
+test("apiErrorSourceLabel: non-string input never throws", function () {
+  assert.doesNotThrow(function () { Model.apiErrorSourceLabel(null) })
+  assert.doesNotThrow(function () { Model.apiErrorSourceLabel(undefined) })
+  assert.doesNotThrow(function () { Model.apiErrorSourceLabel(42) })
+  assert.strictEqual(Model.apiErrorSourceLabel(null), "")
+  assert.strictEqual(Model.apiErrorSourceLabel(undefined), "")
 })
 
 // -------------------------------------------------------------------- gh version pin

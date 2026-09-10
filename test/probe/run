@@ -155,6 +155,9 @@ check_no_orphans "$mocklog" "ok"
 check_exit_status "ok"
 check_no_engine_errors "$log" "ok"
 check_no_note "ok" "$json"
+false_diag="$(grep -c 'settings diagnostic:' "$OUT_DIR/ok.log" 2>/dev/null)"
+[[ "${false_diag:-0}" -eq 0 ]] && ok "ok: no settings diagnostic logged while the entry is present" \
+  || not_ok "ok: no settings diagnostic logged while the entry is present (got ${false_diag:-0})"
 
 echo
 echo "== unauthenticated -> recovery (the historical deadlock class) =="
@@ -313,6 +316,27 @@ check_exit_status "offline"
 check_no_engine_errors "$log" "offline"
 check_no_note "offline" "$json"
 
+echo "== legacy-entry-lost: the legacy host drops the own entry after boot -> diagnostic logged once =="
+log="$(run_scenario legacy-entry-lost GH_MOCK_MODE=ok GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=legacy-entry-lost PATH="/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/legacy-entry-lost.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "legacy-entry-lost: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "legacy-entry-lost: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" settingsSource)" == "legacy" ]] && ok "legacy-entry-lost: settingsSource=legacy" \
+    || not_ok "legacy-entry-lost: settingsSource=legacy (got: $(field "$json" settingsSource))"
+  [[ "$(field "$json" settingsDiagnostic)" == "missing own entry" ]] && ok "legacy-entry-lost: settingsDiagnostic=\"missing own entry\"" \
+    || not_ok "legacy-entry-lost: settingsDiagnostic=\"missing own entry\" (got: $(field "$json" settingsDiagnostic))"
+  diag_lines="$(grep -c 'settings diagnostic: missing own entry' "$log" 2>/dev/null)"
+  [[ "${diag_lines:-0}" -eq 1 ]] && ok "legacy-entry-lost: the diagnostic was logged exactly once" \
+    || not_ok "legacy-entry-lost: the diagnostic was logged exactly once (got ${diag_lines:-0})"
+fi
+check_no_orphans "$mocklog" "legacy-entry-lost"
+check_exit_status "legacy-entry-lost"
+check_no_engine_errors "$log" "legacy-entry-lost"
+check_no_note "legacy-entry-lost" "$json"
+
 echo
 echo "== api-error-at-probe: the auth probe itself gets the 502, not just a later poll =="
 log="$(run_scenario api-error-at-probe GH_MOCK_MODE=api-error GHS_GHPATH="$MOCK_PATH")"
@@ -325,9 +349,9 @@ else
   [[ "$(field "$json" status)" == "api-error" ]] && ok "api-error-at-probe: status=api-error" \
     || not_ok "api-error-at-probe: status=api-error (got: $(field "$json" status))"
   detail="$(field "$json" apiErrorDetail)"
-  [[ "$detail" == *"dashboard: HTTP 502"* && "$detail" == *"notifications: HTTP 502"* && "$detail" != *"probe:"* ]] \
-    && ok "api-error-at-probe: apiErrorDetail names both sources and excludes probe: ($detail)" \
-    || not_ok "api-error-at-probe: apiErrorDetail names both sources and excludes probe: (got: $detail)"
+  [[ "$detail" == *"dashboard: HTTP 502"* && "$detail" == *"notifications: HTTP 502"* && "$detail" != *"sign-in check:"* ]] \
+    && ok "api-error-at-probe: apiErrorDetail names both sources and excludes sign-in check: ($detail)" \
+    || not_ok "api-error-at-probe: apiErrorDetail names both sources and excludes sign-in check: (got: $detail)"
   graphql_calls="$(grep -c 'ARGV: api graphql' "$mocklog" 2>/dev/null || echo 0)"
   notif_calls="$(grep -c 'ARGV: api -i notifications' "$mocklog" 2>/dev/null || echo 0)"
   [[ "${graphql_calls:-0}" -ge 1 && "${notif_calls:-0}" -ge 1 ]] \
@@ -539,6 +563,32 @@ check_no_orphans "$mocklog" "gh-unsupported"
 check_exit_status "gh-unsupported"
 check_no_engine_errors "$log" "gh-unsupported"
 check_no_note "gh-unsupported" "$json"
+
+echo
+echo "== login-switch: mid-session gh account change re-derives notification ownership =="
+mode_file_login="$OUT_DIR/login-switch.mode"
+log="$(run_scenario login-switch GH_MOCK_MODE=ok GH_MOCK_MODE_FILE="$mode_file_login" \
+  GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=login-switch GHS_MODE_FILE="$mode_file_login")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/login-switch.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "login-switch: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "login-switch: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" login)" == "SomeoneElse" ]] && ok "login-switch: login followed the switch (SomeoneElse)" \
+    || not_ok "login-switch: login followed the switch (got: $(field "$json" login))"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "login-switch: status stays ok through the switch" \
+    || not_ok "login-switch: status stays ok through the switch (got: $(field "$json" status))"
+  # The fixture has 4 notifications, 1 owned by the original login -- once
+  # the switched-to login owns none of them, all 4 read as external.
+  [[ "$(field "$json" notificationsExternalCount)" == "4" ]] \
+    && ok "login-switch: every notification re-derived external (4/4)" \
+    || not_ok "login-switch: every notification re-derived external (got: $(field "$json" notificationsExternalCount))"
+fi
+check_no_orphans "$mocklog" "login-switch"
+check_exit_status "login-switch"
+check_no_engine_errors "$log" "login-switch"
+check_no_note "login-switch" "$json"
 
 echo
 echo "-- stale ordering (two pollers write disjoint data) -- not applicable, no scenario invented --"

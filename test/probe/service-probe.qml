@@ -42,6 +42,8 @@ ShellRoot {
     onLoaded: {
       probeRoot.service = item
       item.shell = shellStub
+      // Short boot grace so a legacy-entry loss after settle logs promptly.
+      item.settingsDiagnosticGraceMs = 300
       if (probeRoot.ghPathOverride) item.ghPath = probeRoot.ghPathOverride
       item.ghPathTimeoutMs = 1500
       item.ghVersionTimeoutMs = 1500
@@ -158,6 +160,13 @@ ShellRoot {
           })
         })
       })
+    } else if (scenario === "legacy-entry-lost") {
+      // A legacy host replaces its whole shellConfig; losing the own entry
+      // after boot must surface as a diagnostic, not silence.
+      _waitUntil(2000, function () { return service._legacyDiagnosticsArmed === true }, function () {
+        shellStub.shellConfig = { version: 1, bar: { layout: { left: [], center: [], right: [] } }, plugins: [] }
+        _waitUntil(2000, function () { return service.settingsDiagnostic === "missing own entry" }, finishNow)
+      })
     } else if (scenario === "api-error") {
       // A poller that was ok flips to api-error on its own next cycle --
       // the mode file only takes effect on the fetch refresh() triggers.
@@ -174,6 +183,13 @@ ShellRoot {
             _waitUntil(4000, function () { return service.status === "ok" }, finishNow)
           })
         })
+      })
+    } else if (scenario === "login-switch") {
+      // The mode file only rewrites the dashboard branch's viewer.login --
+      // refresh() picks it up on the next poll, same trigger as api-error.
+      writeModeFile("login-switch", function () {
+        service.refresh()
+        _waitUntil(4000, function () { return service._login === "SomeoneElse" }, finishNow)
       })
     } else if (scenario === "rate-limited-resume") {
       // Only notifications' -i output carries a real X-Ratelimit-Reset
@@ -251,10 +267,15 @@ ShellRoot {
       ghVersion: service.ghVersion,
       dashboardIntervalSec: service.dashboardIntervalSec,
       settingsSource: service.settingsSource,
+      settingsDiagnostic: service.settingsDiagnostic,
       ghVersionSupported: service.ghVersionSupported,
       dashboardStatus: debugProp("_dashboardStatus"),
       notifStatus: debugProp("_notifStatus"),
       _reProbeArmed: debugProp("_reProbeArmed"),
+      login: debugProp("_login"),
+      _dashboardTimerIntervalMs: debugProp("_dashboardTimerIntervalMs"),
+      _notificationsTimerIntervalMs: debugProp("_notificationsTimerIntervalMs"),
+      notificationsExternalCount: debugProp("_notificationsExternalCount"),
       note: note,
       _ghPathWatchdogFiredCount: debugProp("_ghPathWatchdogFiredCount"),
       _probeWatchdogFiredCount: debugProp("_probeWatchdogFiredCount"),

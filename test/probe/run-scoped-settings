@@ -112,6 +112,18 @@ else
   grep 'TypeError\|ReferenceError\|ERROR:' "$LOG" | head -5 | sed 's/^/    /'
 fi
 
+# The host injects `shell` twice before the file loads (once pre-injection,
+# once on load) -- only the loaded entry should log "settings applied", so
+# this must count exactly 1 occurrence before the probe's own startup marker.
+phase_line="$(grep -n 'PROBE_PHASE startup-done' "$LOG" | head -n1 | cut -d: -f1)"
+if [[ -n "$phase_line" ]]; then
+  applied_before="$(head -n "$((phase_line - 1))" "$LOG" | grep -c 'settings applied')"
+  [[ "$applied_before" == "1" ]] && ok "scoped-settings: startup logs applied settings once" \
+    || not_ok "scoped-settings: startup logs applied settings once (got $applied_before before PROBE_PHASE startup-done)"
+else
+  not_ok "scoped-settings: startup logs applied settings once (PROBE_PHASE startup-done marker not found)"
+fi
+
 if [[ -z "$json" ]]; then
   not_ok "scoped-settings: probe printed a PROBE_RESULT line"
 else
@@ -130,6 +142,7 @@ else
     "facade snapshot stays stale"
     "unrelated config write leaves settings untouched"
     "write merges from fresh file"
+    "interval change re-arms the poller"
     "invalid file falls back to defaults with diagnostic"
     "write refused while invalid"
     "deleted file falls back"

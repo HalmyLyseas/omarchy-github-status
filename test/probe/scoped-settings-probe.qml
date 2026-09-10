@@ -56,6 +56,18 @@ ShellRoot {
   FileView { id: configWriter; path: root.configFilePath; preload: false; atomicWrites: true; blockWrites: true }
   Process { id: removeConfigProc; command: ["/usr/bin/rm", "-f", root.configFilePath] }
 
+  // Blocking re-read of the mock's own invocation log, same "set path
+  // twice" pattern Service.qml uses for a fresh read -- counts fetch calls
+  // around a settings write to prove no spurious poll fired.
+  FileView { id: mockLogFile; preload: false; blockLoading: true; printErrors: false }
+  function mockLogFetchCount() {
+    mockLogFile.path = ""
+    mockLogFile.path = Quickshell.env("GH_MOCK_LOG") || ""
+    var text = mockLogFile.text() || ""
+    var matches = text.match(/ARGV: api (graphql|-i notifications)/g)
+    return matches ? matches.length : 0
+  }
+
   function writeEntry(entry) {
     var doc = { version: 1, bar: { layout: { left: [], center: [], right: entry ? [entry] : [] } }, plugins: [] }
     configWriter.setText(JSON.stringify(doc))
@@ -154,6 +166,9 @@ ShellRoot {
   Component.onCompleted: root.initApi()
 
   function beginExercise() {
+    // Marks where startup ends and the exercise begins -- the runner counts
+    // "settings applied" lines logged before this, which must be exactly 1.
+    console.log("PROBE_PHASE startup-done")
     check("scoped host", root.service.scopedHost === true)
     check("initial non-default values",
       root.service.dashboardIntervalSec === 300 && root.service.notificationsIntervalSec === 120
@@ -243,7 +258,36 @@ ShellRoot {
     root._waitUntil(function () {
       return root.service.repoLimit === 9 && root.service.issuesFilter === "all"
     }, 4000, function (timedOut) {
-      root.invalidFile(p)
+      root.intervalChangeRearms(p)
+    })
+  }
+
+  // A settings write that changes dashboardIntervalSec must re-arm the
+  // running timer's countdown at the new length immediately -- no fetch,
+  // and both timers stay running throughout.
+  function intervalChangeRearms(p) {
+    var runningBefore = root.service._dashboardTimerRunning === true && root.service._notificationsTimerRunning === true
+    var fetchesBefore = root.mockLogFetchCount()
+    root.writeEntry({
+      id: root.pluginId, dashboardIntervalSec: 600, notificationsIntervalSec: 120,
+      repoLimit: 9, issuesFilter: "all", sibling: "kept"
+    })
+    root._waitUntil(function () {
+      return root.service._dashboardTimerIntervalMs === 600000 && root.service._notificationsTimerIntervalMs === 120000
+    }, 4000, function (timedOut) {
+      // Give a spurious fetch a full second to show up before checking --
+      // a re-armed countdown must not itself trigger one.
+      root._waitUntil(function () { return false }, 1000, function () {
+        var fetchesAfter = root.mockLogFetchCount()
+        check("interval change re-arms the poller",
+          !timedOut && runningBefore
+          && root.service._dashboardTimerIntervalMs === 600000
+          && root.service._notificationsTimerIntervalMs === 120000
+          && root.service._dashboardTimerRunning === true
+          && root.service._notificationsTimerRunning === true
+          && fetchesAfter === fetchesBefore)
+        root.invalidFile(p)
+      })
     })
   }
 

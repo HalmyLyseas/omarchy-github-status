@@ -524,6 +524,18 @@ function apiErrorDetail(stderrText, exitCode) {
   return truncate(label, API_ERROR_DETAIL_CAP)
 }
 
+// User-facing name for one of apiErrorDetail's sources, prefixed onto its
+// detail string (e.g. "dashboard: HTTP 502"). Anything unrecognized passes
+// through unchanged rather than throwing.
+function apiErrorSourceLabel(source) {
+  switch (source) {
+    case "dashboard": return "dashboard"
+    case "notifications": return "notifications"
+    case "probe": return "sign-in check"
+    default: return safeStr(source, "")
+  }
+}
+
 // ------------------------------------------------------------------ gh version pin
 
 // Major versions of the gh CLI this plugin has actually been tested
@@ -772,6 +784,7 @@ if (typeof module !== "undefined" && module.exports) {
     isSafeGithubUrl: isSafeGithubUrl,
     classifyFailure: classifyFailure,
     apiErrorDetail: apiErrorDetail,
+    apiErrorSourceLabel: apiErrorSourceLabel,
     parseHeadersAndBody: parseHeadersAndBody,
     badgeText: badgeText,
     summaryTooltip: summaryTooltip,

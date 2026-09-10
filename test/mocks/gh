@@ -107,6 +107,10 @@ if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
       pad="$(head -c 200 /dev/zero | tr '\0' 'x')"
       while true; do printf '{"pad":"%s"}\n' "$pad"; done
       ;;
+    login-switch)
+      sed '0,/"login": "HalmyLyseas"/s//"login": "SomeoneElse"/' "$FIXTURES/mega-graphql.json"
+      exit 0
+      ;;
     *)
       cat "$FIXTURES/mega-graphql.json"
       exit 0

@@ -50,6 +50,21 @@ Item {
   // Debug-only: whether a retry of the login probe is scheduled -- true
   // after any probe failure that didn't already resolve the login.
   readonly property bool _reProbeArmed: reProbeTimer.running
+  // Debug-only: the poll timers' live interval/running state, so a probe
+  // can confirm a settings-driven interval change re-armed the countdown
+  // without stopping the timer or forcing a fetch.
+  readonly property double _dashboardTimerIntervalMs: dashboardTimer.interval
+  readonly property double _notificationsTimerIntervalMs: notificationsTimer.interval
+  readonly property bool _dashboardTimerRunning: dashboardTimer.running
+  readonly property bool _notificationsTimerRunning: notificationsTimer.running
+  // Debug-only: the login learned so far -- never logged beyond the one
+  // transition line in _captureLoginFromDashboard, held in memory only.
+  readonly property string _login: internal.login
+  // Debug-only: how many current notifications are flagged external, so a
+  // probe can confirm a login switch actually re-derived ownership.
+  readonly property int _notificationsExternalCount: internal.notifications.filter(function (n) {
+    return n && n.isExternal === true
+  }).length
   readonly property bool busy: dashboardProc.running || notificationsProc.running
   // Debug-only: lets a probe poll for "every process settled", including
   // the three that `busy` above deliberately excludes (ghpath/version/probe).
@@ -182,25 +197,29 @@ Item {
   readonly property string issuesFilter:
     validIssuesFilter(settingStr(settingsEntry, "issuesFilter", manifestDefault("issuesFilter", "focus")))
 
-  // A bar-layout entry can be a bare string instead of an object -- that
-  // renders fine but cannot carry settings. Delayed so a legacy host's
-  // shellConfig has time to move past its transient boot-time state.
+  // A legacy host's shellConfig sits at its built-in defaults for a moment
+  // at boot, so legacy diagnostics stay quiet for this grace period; the
+  // timer then logs the standing diagnostic and arms change-driven logging.
+  property int settingsDiagnosticGraceMs: 15000
+  property bool _legacyDiagnosticsArmed: false
+
   Timer {
-    interval: 15000
+    interval: root.settingsDiagnosticGraceMs
     running: true
     repeat: false
     onTriggered: {
+      root._legacyDiagnosticsArmed = true
       if (!root.scopedHost && root.settingsDiagnostic !== "") {
         root.log("settings diagnostic: " + root.settingsDiagnostic + " -- manifest defaults are in effect")
       }
     }
   }
 
-  // Change-driven, unlike the legacy timer above: a scoped diagnostic can
-  // flip at any time from an external shell.json edit, so it logs once per
-  // real transition instead of waiting on a fixed delay.
+  // Change-driven: a scoped diagnostic can flip at any time from an external
+  // shell.json edit, and a legacy host can lose its entry after boot, so
+  // every real transition past the grace period logs once.
   onSettingsDiagnosticChanged: {
-    if (root.scopedHost && root.settingsDiagnostic !== "") {
+    if ((root.scopedHost || root._legacyDiagnosticsArmed) && root.settingsDiagnostic !== "") {
       root.log("settings diagnostic: " + root.settingsDiagnostic + " -- manifest defaults are in effect")
     }
   }
@@ -223,6 +242,10 @@ Item {
 
   function logSettingsApplied() {
     if (!root.shell) return
+    // A null entry is reported by the diagnostic path, so only a loaded
+    // entry is logged here -- otherwise the host's own pre-load emission
+    // (entry still null) logs manifest defaults as "applied" too.
+    if (root.settingsEntry === null) return
     log("settings applied (source=" + root.settingsSource
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
       + " notificationsIntervalSec=" + root.notificationsIntervalSec
@@ -780,13 +803,13 @@ Item {
   function pickApiErrorDetail() {
     var parts = []
     if (internal.dashboardStatus === "api-error" && internal.dashboardApiError) {
-      parts.push("dashboard: " + internal.dashboardApiError)
+      parts.push(Model.apiErrorSourceLabel("dashboard") + ": " + internal.dashboardApiError)
     }
     if (internal.notifStatus === "api-error" && internal.notifApiError) {
-      parts.push("notifications: " + internal.notifApiError)
+      parts.push(Model.apiErrorSourceLabel("notifications") + ": " + internal.notifApiError)
     }
     if (!internal.pollersActive && internal.probeStatus === "api-error" && internal.probeApiError) {
-      parts.push("probe: " + internal.probeApiError)
+      parts.push(Model.apiErrorSourceLabel("probe") + ": " + internal.probeApiError)
     }
     return parts.join(" · ")
   }
@@ -973,7 +996,7 @@ Item {
     if (exitCode === 0) {
       var login = String(rawOut || "").replace(/^\s+|\s+$/g, "")
       if (login) internal.login = login
-      log("probe: authenticated")
+      log("sign-in check: authenticated")
       onFetchSuccess("probe")
       // Mid-session recovery: a poller that previously recorded
       // no-gh/unauthenticated must not keep blocking forever once a fresh
@@ -1038,9 +1061,9 @@ Item {
 
   Timer {
     id: dashboardTimer
-    // Placeholder only -- reassigned imperatively at arm time below (a
-    // live-bound interval would discard an in-progress countdown on any
-    // settings edit).
+    // Placeholder only -- reassigned imperatively at arm time below and on
+    // a settings change (a live-bound interval would discard an
+    // in-progress countdown on any settings edit).
     interval: 180000
     running: internal.pollersActive
     repeat: true
@@ -1051,6 +1074,11 @@ Item {
       root.triggerDashboardFetch()
     }
   }
+
+  // A changed interval restarts the countdown from now at the new length --
+  // no immediate fetch, and triggeredOnStart never re-fires. A no-op while
+  // the timer isn't running; the next arm picks up the current value anyway.
+  onDashboardIntervalSecChanged: if (dashboardTimer.running) dashboardTimer.interval = Math.max(60, root.dashboardIntervalSec) * 1000
 
   function triggerDashboardFetch() {
     if (dashboardProc.running) return
@@ -1108,10 +1136,18 @@ Item {
     }
   }
 
+  // Capture the login the first time it's seen, or follow it across a
+  // later `gh` account switch -- either way, notifications already fetched
+  // under the old login are re-derived so isExternal stays accurate.
   function _captureLoginFromDashboard(login) {
-    if (!login || internal.login) return
+    if (!login || login === internal.login) return
+    var previous = internal.login
     internal.login = login
-    log("login learned opportunistically from dashboard response")
+    if (previous) {
+      log("login changed (" + previous + " -> " + login + ") -- re-deriving ownership")
+    } else {
+      log("login learned opportunistically from dashboard response")
+    }
     if (internal.notifications.length > 0) {
       internal.notifications = Model.remapNotificationsExternal(internal.notifications, internal.login)
     }
@@ -1158,6 +1194,8 @@ Item {
 
   Timer {
     id: notificationsTimer
+    // Reassigned imperatively at arm time below and on a settings change,
+    // same rule as dashboardTimer -- never a live interval: binding.
     interval: 60000
     running: internal.pollersActive
     repeat: true
@@ -1168,6 +1206,9 @@ Item {
       root.triggerNotificationsFetch()
     }
   }
+
+  // Same immediate-restart semantics as dashboardTimer's own handler above.
+  onNotificationsIntervalSecChanged: if (notificationsTimer.running) notificationsTimer.interval = Math.max(60, root.notificationsIntervalSec) * 1000
 
   function triggerNotificationsFetch() {
     if (notificationsProc.running) return
