@@ -53,7 +53,7 @@ ShellRoot {
     function unregisterClickTarget(target) {}
   }
 
-  FileView { id: configWriter; path: root.configFilePath; preload: false; atomicWrites: true }
+  FileView { id: configWriter; path: root.configFilePath; preload: false; atomicWrites: true; blockWrites: true }
   Process { id: removeConfigProc; command: ["/usr/bin/rm", "-f", root.configFilePath] }
 
   function writeEntry(entry) {
@@ -218,8 +218,32 @@ ShellRoot {
       root._waitUntil(function () { return root.service.repoLimit === 8 }, 4000, function (timedOut) {
         check("unrelated config write leaves settings untouched",
           !timedOut && afterUnrelated === before && root._settingsEntryChangeCount === before + 1)
-        root.invalidFile(p)
+        root.freshWriteMerge(p)
       })
+    })
+  }
+
+  // A synchronous blocking write, then the setter call in the very same JS
+  // turn -- before the watcher could ever reload -- proves the write reads
+  // the file as it is now rather than the last watched snapshot.
+  function freshWriteMerge(p) {
+    var callsBefore = root.updateSettingsCalls.length
+    configWriter.setText(JSON.stringify({
+      version: 1,
+      bar: { layout: { left: [], center: [], right: [{
+        id: root.pluginId, dashboardIntervalSec: 300, notificationsIntervalSec: 120,
+        repoLimit: 9, issuesFilter: "focus", sibling: "kept"
+      }] }, plugins: [] }
+    }))
+    var result = root.service.setIssuesFilter("all")
+    var recorded = root.updateSettingsCalls[root.updateSettingsCalls.length - 1]
+    check("write merges from fresh file",
+      result === true && root.updateSettingsCalls.length === callsBefore + 1
+      && !!recorded && recorded.repoLimit === 9 && recorded.issuesFilter === "all")
+    root._waitUntil(function () {
+      return root.service.repoLimit === 9 && root.service.issuesFilter === "all"
+    }, 4000, function (timedOut) {
+      root.invalidFile(p)
     })
   }
 

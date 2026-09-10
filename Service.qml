@@ -105,14 +105,31 @@ Item {
     return true
   }
 
-  // shell.updateEntryInline REPLACES the whole settings entry -- merge onto
-  // the current settingsEntry so every other setting survives the write.
-  // A null entry is refused below rather than written -- see settingsEntry.
+  // shell.updateEntryInline REPLACES the whole entry -- merge onto the
+  // current one first. A scoped host blocks on a fresh shell.json read
+  // before merging, so a write landing after the last reload is never lost.
   function setIssuesFilter(mode) {
     var next = validIssuesFilter(mode)
     if (!shell || typeof shell.updateEntryInline !== "function") {
       log("setIssuesFilter: shell.updateEntryInline unavailable -- cannot persist")
       return false
+    }
+    if (root.scopedHost) {
+      // reload() alone can replay an already-loaded FileView's cached text;
+      // clearing path and setting it back forces a real re-read, proven by
+      // test/probe/scoped-settings-probe.qml's "write merges from fresh file".
+      freshSettingsFile.path = ""
+      freshSettingsFile.path = root.configPath
+      var text = freshSettingsFile.text()
+      var fresh = Model.ownEntryFromConfigText(text, "halmylyseas.github-status", 1048576)
+      if (fresh.error !== "") {
+        log("setIssuesFilter: fresh config read failed (" + fresh.error + ") -- refusing to write")
+        return false
+      }
+      root.loadScopedSettings(text)
+      shell.updateEntryInline("halmylyseas.github-status", Model.mergedSettings(fresh.entry, "issuesFilter", next))
+      log("issuesFilter set to " + next)
+      return true
     }
     if (root.settingsEntry === null) {
       log("setIssuesFilter: no valid settings entry loaded -- refusing to write")
@@ -238,6 +255,16 @@ Item {
     onLoaded: root.loadScopedSettings(text())
     onLoadFailed: root.clearScopedSettings("config load failed")
     onFileChanged: root.refreshScopedSettings()
+  }
+
+  // Used only by setIssuesFilter on a scoped host, right before a write: a
+  // blocking read so the merge starts from the file as it is now, not the
+  // last watched snapshot. setIssuesFilter sets `path` itself on every call.
+  FileView {
+    id: freshSettingsFile
+    preload: false
+    blockLoading: true
+    printErrors: false
   }
 
   function findEntry(config, id) {
@@ -493,10 +520,18 @@ Item {
     _armProcess("ghPath")
   }
 
+  // A login shell can print a banner line before "type -P gh" runs, so the
+  // resolved path is the LAST non-empty line, not the first -- and it must
+  // look like a real gh path, not more banner text.
   function handleGhPathExit(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
-      var resolved = String(rawOut || "").split("\n")[0].replace(/^\s+|\s+$/g, "")
-      if (resolved && resolved.charAt(0) === "/") {
+      var lines = String(rawOut || "").split("\n")
+      var resolved = ""
+      for (var i = lines.length - 1; i >= 0; i--) {
+        var trimmed = lines[i].replace(/^\s+|\s+$/g, "")
+        if (trimmed !== "") { resolved = trimmed; break }
+      }
+      if (resolved && resolved.charAt(0) === "/" && resolved.slice(-3) === "/gh") {
         root.ghPath = resolved
         log("gh resolved at " + resolved)
         startProbe()

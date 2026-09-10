@@ -18,51 +18,50 @@ carries the security model.
 ### Injection contract
 
 `BarWidget.qml` loads `Panel.qml` eagerly (`active: true`) and calls
-`injectPanel()` on every load and every change to `bar`/`settings`,
-handing over `bar`, `settings`, `anchorItem` (for `KeyboardPanel`
-positioning), and `hostWidget`. `Panel.qml` resolves `service` itself the
-same way rather than as a prop — both null-guard every `svc` read, since
-it may not have resolved yet, or the shell may destroy/recreate it if the
-registry transiently reports the plugin disabled at startup.
+`injectPanel()` on every load and every change to `bar`/`settings`, handing
+over `bar`, `settings`, `anchorItem` (for `KeyboardPanel` positioning), and
+`hostWidget`. `Panel.qml` resolves `service` itself the same way rather than
+as a prop — both null-guard every `svc` read, since it may not have resolved
+yet, or the shell may destroy/recreate it if the registry transiently
+reports the plugin disabled at startup.
 
 ### Settings sources
 
 `Service.qml` picks its settings source by capability, not host version:
 `hasLegacyShellConfig` binds `settingsEntry` live to
-`Model.entryFor(shell.shellConfig, id)`; `scopedHost` instead watches
-`shell.json` (see below). Either way the four derived settings
-(`dashboardIntervalSec`, `notificationsIntervalSec`, `repoLimit`,
-`issuesFilter`) clamp to manifest defaults when `settingsEntry` is null,
-never a live `Timer.interval` binding (see "Process contract").
-`settingsSource` and `settingsDiagnostic` report which path is active and
-why.
+`Model.entryFor(shell.shellConfig, id)`; `scopedHost` instead watches `shell.json` (see
+below). Either way the four derived settings (`dashboardIntervalSec`,
+`notificationsIntervalSec`, `repoLimit`, `issuesFilter`) clamp to manifest defaults when
+`settingsEntry` is null, never a live `Timer.interval` binding (see "Process contract").
+`settingsSource` and `settingsDiagnostic` report which path is active and why.
 
 ## Host compatibility
 
-Supports Omarchy 4.0.1 or later. 4.0.1/4.0.2 inject the host shell
-directly (`hasLegacyShellConfig`); 4.0.3 introduced a capability-scoped
-`PluginShellApi` facade instead (`scopedHost`, `shellConfig` undefined).
-The facade supports `shell.serviceFor(id)` and
-`shell.updateEntryInline(id, settings)` scoped to this plugin's own id,
-but its `barConfig` copy only refreshes on a plugin-list/widget-registry
-change, never an inline write — so `Service.qml` instead watches
-`configPath` (`~/.config/omarchy/shell.json`, capped 1 MiB), keeping only
-its own entry (`Model.ownEntryFromConfigText`). Startup never writes, and
-since `updateEntryInline` replaces the whole entry, `setIssuesFilter`
-refuses to write (and logs why) whenever `settingsEntry` is null rather
-than drop every sibling setting; `settingsDiagnostic` names the exact
-cause, logged once per change, never per poll. `test/host-contract.mjs`
-and `test/probe/run-scoped-settings` (both in `test/all` and CI) pin the
-facade's shape and exercise the scoped path end to end.
+Supports Omarchy 4.0.1 or later. 4.0.1/4.0.2 inject the host shell directly
+(`hasLegacyShellConfig`); 4.0.3 introduced a capability-scoped `PluginShellApi` facade
+instead (`scopedHost`, `shellConfig` undefined). The facade supports
+`shell.serviceFor(id)` and `shell.updateEntryInline(id, settings)` scoped to this
+plugin's own id, but its `barConfig` copy only refreshes on a
+plugin-list/widget-registry change, never an inline write — so `Service.qml` instead
+watches `configPath` (`~/.config/omarchy/shell.json`, capped 1 MiB), keeping only its
+own entry (`Model.ownEntryFromConfigText`). Startup never writes. Since
+`updateEntryInline` replaces the whole entry, `setIssuesFilter` re-reads `shell.json`
+with a blocking `FileView` right before a scoped write, closing the window between the
+last watched reload and the write, and refuses to write (and logs why) whenever the
+fresh entry is null rather than drop every sibling setting; `settingsDiagnostic` names
+the exact cause, logged once per change, never per poll.
+`test/probe/run-scoped-settings` drives the settings path through the installed facade
+with a host-style write callback; the host's own write behavior is pinned lexically by
+`test/host-contract.mjs`. Both run in `test/all` and CI.
 
 ## Process contract
 
-**Every `gh` invocation is a direct Quickshell `Process` child** — never a
-shell wrapper. `gh` is mise-installed, off Quickshell's PATH, so its path
-resolves once via `bash -lc "type -P gh"` (the only shell call anywhere,
-chosen since it prints an executable's real path, ignoring shell
-functions/aliases); every fetch after spawns `gh` as a fixed argv array
-plus at most a sanitised ETag — never interpolated into a shell string.
+**Every `gh` invocation is a direct Quickshell `Process` child** — never a shell
+wrapper. `gh` is mise-installed, off Quickshell's PATH, so its path resolves once via
+`bash -lc "type -P gh"` (the only shell call anywhere, chosen since it prints an
+executable's real path, ignoring shell functions/aliases); every fetch after spawns `gh`
+as a fixed argv array plus at most a sanitised ETag — never interpolated into a shell
+string.
 
 Five `Process` objects, one contract each (`Service.qml`):
 
@@ -74,23 +73,21 @@ Five `Process` objects, one contract each (`Service.qml`):
 | `dashboardProc` | `[gh, "api", "graphql", "-f", "query="+Model.DASHBOARD_QUERY]` | `dashboardTimeoutMs` (30s) | `dashboardOutputCharsCap` (2MB, one JSON line) |
 | `notificationsProc` | `[gh, "api", "-i", "notifications"[, "-H", "If-None-Match: <etag>"]]` | `notificationsTimeoutMs` (30s) | shared line/char caps |
 
-**Watchdog pattern**: one `Timer` per process, interval assigned
-imperatively at arm time (`_armProcess`), never a live `interval:` binding.
-On firing: `signal(15)`, then a 1s kill timer sends `signal(9)` only if
-the process is still running **and** its `processId` matches the PID
-captured at `onStarted` — never escalate against a later process.
+**Watchdog pattern**: one `Timer` per process, interval assigned imperatively at arm
+time (`_armProcess`), never a live `interval:` binding. On firing: `signal(15)`, then a
+1s kill timer sends `signal(9)` only if the process is still running **and** its
+`processId` matches the PID captured at `onStarted` — never escalate against a later
+process.
 
-**Failed-start semantics**: a `Process` whose binary can't be found flips
-`running` to `false` **without ever emitting `exited`**. Every `Process`
-has an `onRunningChanged` scheduling a `Qt.callLater` check, guarded by a
-per-kind generation counter (bumped on arm, stamped by `onExited`) so a
-stale check never misfires against a newer process — synthesizing exit
-code 127 when `exited` never came.
+**Failed-start semantics**: a `Process` whose binary can't be found flips `running` to
+`false` **without ever emitting `exited`**. Every `Process` has an `onRunningChanged`
+scheduling a `Qt.callLater` check, guarded by a per-kind generation counter (bumped on
+arm, stamped by `onExited`) so a stale check never misfires against a newer process —
+synthesizing exit code 127 when `exited` never came.
 
-**Output caps**: one shared `_appendBoundedOutput` helper backs all five
-processes' buffers, always **replaced** (never `.push()`ed) so bindings
-notice; a breach caps the line to the limit, sends `signal(15)`, and
-increments an overflow counter.
+**Output caps**: one shared `_appendBoundedOutput` helper backs all five processes'
+buffers, always **replaced** (never `.push()`ed) so bindings notice; a breach caps the
+line to the limit, sends `signal(15)`, and increments an overflow counter.
 
 ## Status ladder and re-probe rules
 
@@ -110,32 +107,29 @@ deadlock on a status nothing re-evaluates once set.
 
 ## Partial-dashboard accounting
 
-`Model.mapDashboard` returns each of `openPRs`/`reviewRequests`/`repos`/
-`myIssues` as either a mapped array (`[]` is legitimately "nothing here")
-or `null` ("did not resolve, don't replace"). `handleDashboardExit`
-reassigns only non-null sections, sets `dashboardPartial` when some (not
-all) parsed, and treats it as full failure only when **every** section is
-null — including a non-zero `gh` exit whose stdout still parses to an
-object with object `data` (real GraphQL `errors` exit 1 but keep the
-full envelope). Each section's real GraphQL `totalCount`/`issueCount`
-rides alongside it, `null` exactly when that section is, letting
-`SectionHeader`'s pill read `"N of T"` past the rendered/capped window. A
-genuine notifications HTTP 304 is success, not failure: the ETag
-refreshes if a new one appears and `lastSyncMs` bumps, but
-`internal.notifications` is deliberately **not** reassigned — conditional
-requests make an unchanged inbox cost near-nothing. `Service.lastSyncMs`
-(`Model.oldestSync`) is the OLDEST of the two sources' own sync markers,
-not the freshest, so the hero's "Synced X ago" is a lower bound on every
-section's real freshness.
+`Model.mapDashboard` returns each of `openPRs`/`reviewRequests`/`repos`/ `myIssues` as
+either a mapped array (`[]` is legitimately "nothing here") or `null` ("did not resolve,
+don't replace"). `handleDashboardExit` reassigns only non-null sections, sets
+`dashboardPartial` when some (not all) parsed, and treats it as full failure only when
+**every** section is null — including a non-zero `gh` exit whose stdout still parses to
+an object with object `data` (real GraphQL `errors` exit 1 but keep the full envelope).
+Each section's real GraphQL `totalCount`/`issueCount` rides alongside it, `null` exactly
+when that section is, letting `SectionHeader`'s pill read `"N of T"` past the
+rendered/capped window. A genuine notifications HTTP 304 is success, not failure: the
+ETag refreshes if a new one appears and `lastSyncMs` bumps, but `internal.notifications`
+is deliberately **not** reassigned — conditional requests make an unchanged inbox cost
+near-nothing. `Service.lastSyncMs` (`Model.oldestSync`) is the OLDEST of the two
+sources' own sync markers, not the freshest, so the hero's "Synced X ago" is a lower
+bound on every section's real freshness.
 
 ## CLI version pin
 
-`Model.SUPPORTED_GH_MAJORS` lists the gh CLI major versions this plugin
-has been tested against (matched on the leading segment: `2.98.0`/`2.0.0`
-both pin). `ghVersionProc` reads `gh --version` once per path resolution
-into `Service.ghVersion`/`ghVersionSupported`, adding a dim, non-severe
-status hint on an unsupported result — never blocking pollers or
-`status`. `test/cli-contract.mjs` fails loudly on an unpinned major.
+`Model.SUPPORTED_GH_MAJORS` lists the gh CLI major versions this plugin has been tested
+against (matched on the leading segment: `2.98.0`/`2.0.0` both pin). `ghVersionProc`
+reads `gh --version` once per path resolution into
+`Service.ghVersion`/`ghVersionSupported`, adding a dim, non-severe status hint on an
+unsupported result — never blocking pollers or `status`. `test/cli-contract.mjs` fails
+loudly on an unpinned major.
 
 ## Security invariants
 
@@ -157,6 +151,11 @@ status hint on an unsupported result — never blocking pollers or
 
 ## Accepted risks
 
+- **The 1 MiB `shell.json` cap applies after the full read.** The
+  `FileView` already holds the whole file in memory before
+  `Model.ownEntryFromConfigText` rejects an oversized one, so a
+  same-user process placing a huge file there costs memory once, not
+  disk or a crash.
 - **`StdioCollector`/`SplitParser` buffer a line in full until its
   newline**, before this plugin's own char caps see a byte — accepted,
   since the source is the user's own authenticated `gh` CLI.
@@ -221,29 +220,26 @@ feature/hardening branch and lands on `master` only when ready to ship.
 
 ## CI
 
-`.github/workflows/test.yml` runs qmllint (0 errors, at least 5 `.qml`
-files) and `omarchy-plugin-validate` first, then the Node unit tests
-(including `test/cli-contract.mjs`/`test/host-contract.mjs`) on
-`archlinux:latest`, then all three probe suites under `cage` with a
-headless wlroots backend. The `omarchy` package itself is never
-installed — only its `usr/share/omarchy/shell`/`usr/share/omarchy/bin`
-subtrees are extracted (`-Swdd`, skipping dependency resolution) via an
-architecture-specific glob (`omarchy-[0-9]*-*.pkg.tar.zst`) matching
-exactly one archive; `test/ci-local [--no-cage]` mirrors the same steps.
+`.github/workflows/test.yml` runs qmllint (0 errors, at least 5 `.qml` files) and
+`omarchy-plugin-validate` first, then the Node unit tests (including
+`test/cli-contract.mjs`/`test/host-contract.mjs`) on `archlinux:latest`, then all three
+probe suites under `cage` with a headless wlroots backend. The `omarchy` package itself
+is never installed — only its `usr/share/omarchy/shell`/`usr/share/omarchy/bin` subtrees
+are extracted (`-Swdd`, skipping dependency resolution) via an architecture-specific
+glob (`omarchy-[0-9]*-*.pkg.tar.zst`) matching exactly one archive;
+`test/ci-local [--no-cage]` mirrors the same steps.
 
 ## Releasing
 
-Creating the public GitHub repository is a human step. Marketplace
-submission — the `omacom/omarchy-plugin-marketplace` issue, six
-required headings, the AI-agent-clause attestation — needs explicit human
-approval, never filed by an agent. Updates go through a **Plugin
-verification** issue (template `verify-plugin.yml`) naming the plugin
-ID, the repository URL, and the full 40-character SHA of the pushed
-`master` `HEAD`. Do not push to `master` mid-review — approval is bound
-to the exact commit validated; editing the open issue (never a second
-one) re-runs the bot's checks. Actions only runs once `master` is pushed
-(needs a public remote) — `test/ci-local` is the pre-push proof; check
-Actions is green shortly after.
+Creating the public GitHub repository is a human step. Marketplace submission — the
+`omacom/omarchy-plugin-marketplace` issue, six required headings, the AI-agent-clause
+attestation — needs explicit human approval, never filed by an agent. Updates go through
+a **Plugin verification** issue (template `verify-plugin.yml`) naming the plugin ID, the
+repository URL, and the full 40-character SHA of the pushed `master` `HEAD`. Do not push
+to `master` mid-review — approval is bound to the exact commit validated; editing the
+open issue (never a second one) re-runs the bot's checks. Actions only runs once
+`master` is pushed (needs a public remote) — `test/ci-local` is the pre-push proof;
+check Actions is green shortly after.
 
 ## Credits
 

@@ -86,6 +86,16 @@ check_exit_status() {
     || not_ok "$label: qs exited 0 (not a crash/timeout, got exit code: ${code:-unknown})"
 }
 
+# The harness-level `note` field is only ever set on an internal timeout or
+# an unhandled scenario branch -- every scenario below must finish clean, not
+# only the ok one.
+check_no_note() {
+  local label="$1" json="$2"
+  [[ -z "$json" ]] && return
+  [[ "$(field "$json" note)" == "" ]] && ok "$label: no harness-level note/timeout" \
+    || not_ok "$label: no harness-level note/timeout (got: $(field "$json" note))"
+}
+
 # A missing stub/engine error prints TypeError/ReferenceError, or a QML load
 # failure prints "ERROR:" -- match the colon so driver noise (VK_ERROR_...)
 # doesn't count.
@@ -129,7 +139,6 @@ else
     || not_ok "ok: reposTotal===45 (got $(field "$json" reposTotal))"
   [[ "$(field "$json" reviewRequestsTotal)" == "14" ]] && ok "ok: reviewRequestsTotal===14 (exceeds the 10-item window)" \
     || not_ok "ok: reviewRequestsTotal===14 (got $(field "$json" reviewRequestsTotal))"
-  [[ "$(field "$json" note)" == "" ]] && ok "ok: no harness-level note/timeout" || not_ok "ok: no harness-level note/timeout (got: $(field "$json" note))"
   [[ "$(field "$json" ghVersion)" == "2.98.0" ]] && ok "ok: ghVersion parsed from gh --version (2.98.0)" \
     || not_ok "ok: ghVersion parsed from gh --version (got: $(field "$json" ghVersion))"
   [[ "$(field "$json" ghVersionSupported)" == "true" ]] && ok "ok: ghVersionSupported=true (pinned major)" \
@@ -145,6 +154,7 @@ fi
 check_no_orphans "$mocklog" "ok"
 check_exit_status "ok"
 check_no_engine_errors "$log" "ok"
+check_no_note "ok" "$json"
 
 echo
 echo "== unauthenticated -> recovery (the historical deadlock class) =="
@@ -163,6 +173,7 @@ fi
 check_no_orphans "$mocklog" "unauth"
 check_exit_status "unauth"
 check_no_engine_errors "$log" "unauth"
+check_no_note "unauth" "$json"
 
 echo
 echo "== never-authenticated (fresh install, exit 4) -> recovery (C2) =="
@@ -181,6 +192,7 @@ fi
 check_no_orphans "$mocklog" "unauth-fresh"
 check_exit_status "unauth-fresh"
 check_no_engine_errors "$log" "unauth-fresh"
+check_no_note "unauth-fresh" "$json"
 
 echo
 echo "== unauthenticated -> refresh()-driven recovery (re-probe timer left long) =="
@@ -199,6 +211,7 @@ fi
 check_no_orphans "$mocklog" "unauth-refresh"
 check_exit_status "unauth-refresh"
 check_no_engine_errors "$log" "unauth-refresh"
+check_no_note "unauth-refresh" "$json"
 
 echo
 echo "== no-gh (ghPath empty) -> recovery when the mock appears on PATH =="
@@ -225,6 +238,35 @@ fi
 check_no_orphans "$mocklog" "no-gh"
 check_exit_status "no-gh"
 check_no_engine_errors "$log" "no-gh"
+check_no_note "no-gh" "$json"
+
+echo
+echo "== chatty-profile: login shell prints a banner before the PATH pin -- gh path still resolves =="
+chattydir="$OUT_DIR/chatty-bin"
+chattyhome="$OUT_DIR/chatty-home"
+mkdir -p "$chattydir" "$chattyhome"
+ln -sfn "$MOCK_PATH" "$chattydir/gh"
+{
+  echo 'echo "Welcome to the login shell"'
+  printf 'PATH="%s:/usr/bin:/bin"\n' "$chattydir"
+} > "$chattyhome/.bash_profile"
+log="$(run_scenario chatty-profile GH_MOCK_MODE=ok HOME="$chattyhome" PATH="$chattydir:/usr/bin:/bin")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/chatty-profile.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "chatty-profile: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "chatty-profile: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "chatty-profile: status=ok despite the login-shell banner" \
+    || not_ok "chatty-profile: status=ok despite the login-shell banner (got: $(field "$json" status))"
+  ghpath="$(field "$json" ghPath)"
+  [[ "$ghpath" == */gh ]] && ok "chatty-profile: ghPath ends in /gh, resolved past the banner (got $ghpath)" \
+    || not_ok "chatty-profile: ghPath ends in /gh, resolved past the banner (got: $ghpath)"
+fi
+check_no_orphans "$mocklog" "chatty-profile"
+check_exit_status "chatty-profile"
+check_no_engine_errors "$log" "chatty-profile"
+check_no_note "chatty-profile" "$json"
 
 echo
 echo "== removed-mid-session: mock deleted after ok -> no-gh -> recreated -> recovery =="
@@ -251,6 +293,7 @@ fi
 check_no_orphans "$mocklog" "removed"
 check_exit_status "removed"
 check_no_engine_errors "$log" "removed"
+check_no_note "removed" "$json"
 
 echo
 echo "== offline =="
@@ -266,6 +309,7 @@ fi
 check_no_orphans "$mocklog" "offline"
 check_exit_status "offline"
 check_no_engine_errors "$log" "offline"
+check_no_note "offline" "$json"
 
 echo
 echo "== rate-limited (reset header -> rateLimitedUntil, resume after the shortened window) =="
@@ -290,6 +334,7 @@ fi
 check_no_orphans "$mocklog" "rate-limited"
 check_exit_status "rate-limited"
 check_no_engine_errors "$log" "rate-limited"
+check_no_note "rate-limited" "$json"
 
 echo
 echo "== hang: watchdog fires within the shortened deadline; no orphan =="
@@ -311,6 +356,7 @@ fi
 check_no_orphans "$mocklog" "hang"
 check_exit_status "hang"
 check_no_engine_errors "$log" "hang"
+check_no_note "hang" "$json"
 
 echo
 echo "== flood: output cap TERMs the child; chars stay bounded =="
@@ -328,6 +374,7 @@ fi
 check_no_orphans "$mocklog" "flood"
 check_exit_status "flood"
 check_no_engine_errors "$log" "flood"
+check_no_note "flood" "$json"
 
 echo
 echo "== partial (C2): some GraphQL sections null + errors -> keep parsed, dashboardPartial=true =="
@@ -350,6 +397,7 @@ fi
 check_no_orphans "$mocklog" "partial"
 check_exit_status "partial"
 check_no_engine_errors "$log" "partial"
+check_no_note "partial" "$json"
 
 echo
 echo "== notif-garbage (C4): exit-0 but not a 200+array body -> failure, keep last-good, ETag not poisoned =="
@@ -374,6 +422,7 @@ poisoned="$(grep -c 'If-None-Match: "mock-etag-garbage"' "$mocklog" 2>/dev/null)
 check_no_orphans "$mocklog" "notif-garbage"
 check_exit_status "notif-garbage"
 check_no_engine_errors "$log" "notif-garbage"
+check_no_note "notif-garbage" "$json"
 
 echo
 echo "== gh-unsupported: gh --version above the pinned majors -> ghVersionSupported=false, status unaffected =="
@@ -394,6 +443,7 @@ fi
 check_no_orphans "$mocklog" "gh-unsupported"
 check_exit_status "gh-unsupported"
 check_no_engine_errors "$log" "gh-unsupported"
+check_no_note "gh-unsupported" "$json"
 
 echo
 echo "-- stale ordering (two pollers write disjoint data) -- not applicable, no scenario invented --"

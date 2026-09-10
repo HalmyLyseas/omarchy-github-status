@@ -129,6 +129,7 @@ else
     "external edit propagates"
     "facade snapshot stays stale"
     "unrelated config write leaves settings untouched"
+    "write merges from fresh file"
     "invalid file falls back to defaults with diagnostic"
     "write refused while invalid"
     "deleted file falls back"

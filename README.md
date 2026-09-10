@@ -116,8 +116,9 @@ UI in this version):
 | Repos shown in repositories list | 10 | 3–30 | How many of your repos appear in the Repositories section, most-recently-pushed first. |
 | Subscribed only | Focus | Focus / All | Whether My open issues shows only issues you're still subscribed to (Focus) or every open issue you authored (All) — also toggleable from the panel's **Subscribed** chip in the My open issues section header. |
 
-A change made in the settings form applies within a few seconds — no shell
-restart needed.
+A changed value is picked up within a few seconds, no shell restart needed;
+a changed poll interval takes effect from the next poll, not the one already
+scheduled.
 
 ## API usage
 
