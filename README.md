@@ -78,6 +78,9 @@ already allowed to see. Install and sign in to the GitHub CLI first; see
 then run its sign-in flow once from a terminal. If `gh` is missing or not
 signed in, the bar tells you so instead of failing silently.
 
+Omarchy 4.0.1 or later (including the scoped plugin API introduced in
+4.0.3).
+
 ## Install
 
 ```bash
@@ -112,6 +115,9 @@ UI in this version):
 | Notifications poll interval | 60s | 60–600s | How often the notifications inbox polls. Matches GitHub's own guidance; conditional requests mean an unchanged inbox costs nothing. |
 | Repos shown in repositories list | 10 | 3–30 | How many of your repos appear in the Repositories section, most-recently-pushed first. |
 | Subscribed only | Focus | Focus / All | Whether My open issues shows only issues you're still subscribed to (Focus) or every open issue you authored (All) — also toggleable from the panel's **Subscribed** chip in the My open issues section header. |
+
+A change made in the settings form applies within a few seconds — no shell
+restart needed.
 
 ## API usage
 

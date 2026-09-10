@@ -36,11 +36,14 @@ human approval and is never performed by an agent.**
    at most a sanitised ETag as its own element.
 4. **Security invariants are non-negotiable**: no disk cache of GitHub data
    (settings persist through `shell.updateEntryInline`, nothing else does);
-   `Text.PlainText` on every remote-derived `Text{}` sink; URL opens
-   allowlisted to `https://github.com/` and spawned as an argument array (no
-   shell); no package-manager or service-manager command strings anywhere in
-   this plugin; fixed command strings only — remote data is never
-   interpolated into a shell string.
+   the plugin's only other file read is the host's own `shell.json`
+   (read-only, used to recover its own settings entry when no live shell
+   config is injected — never written by this plugin); `Text.PlainText` on
+   every remote-derived `Text{}` sink; URL opens allowlisted to
+   `https://github.com/` and spawned as an argument array (no shell); no
+   package-manager or service-manager command strings anywhere in this
+   plugin; fixed command strings only — remote data is never interpolated
+   into a shell string.
 5. **Never modify anything under `/usr/share/omarchy/`** (reading is
    encouraged). Never run `omarchy refresh`/`omarchy reinstall`.
 6. See `docs/threat-model.md` for the full asset/boundary model this plugin
