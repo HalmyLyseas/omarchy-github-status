@@ -882,6 +882,107 @@ test("filterIssues: defensive on non-array input, never throws", function () {
   assert.deepStrictEqual(Model.filterIssues("not an array", "focus"), [])
 })
 
+// -------------------------------------------------------------------------- entryFor
+
+var PLUGIN_ID = "halmylyseas.github-status"
+
+test("entryFor: finds the own entry in bar.layout.left/center/right", function () {
+  var left = { id: PLUGIN_ID, dashboardIntervalSec: 200 }
+  var center = { id: PLUGIN_ID, dashboardIntervalSec: 300 }
+  var right = { id: PLUGIN_ID, dashboardIntervalSec: 400 }
+  assert.strictEqual(Model.entryFor({ bar: { layout: { left: [left] } } }, PLUGIN_ID), left)
+  assert.strictEqual(Model.entryFor({ bar: { layout: { center: [center] } } }, PLUGIN_ID), center)
+  assert.strictEqual(Model.entryFor({ bar: { layout: { right: [right] } } }, PLUGIN_ID), right)
+})
+
+test("entryFor: falls back to plugins[] when not in the layout", function () {
+  var entry = { id: PLUGIN_ID, repoLimit: 5 }
+  var config = { bar: { layout: { left: [] } }, plugins: [{ id: "other" }, entry] }
+  assert.strictEqual(Model.entryFor(config, PLUGIN_ID), entry)
+})
+
+test("entryFor: missing entry (not in layout or plugins) returns null", function () {
+  var config = { bar: { layout: { left: [{ id: "other" }] } }, plugins: [{ id: "another" }] }
+  assert.strictEqual(Model.entryFor(config, PLUGIN_ID), null)
+})
+
+test("entryFor: a bare-string layout entry is skipped, not matched", function () {
+  var config = { bar: { layout: { left: [PLUGIN_ID] } } }
+  assert.strictEqual(Model.entryFor(config, PLUGIN_ID), null)
+})
+
+test("entryFor: defensive on missing/malformed config, never throws", function () {
+  assert.strictEqual(Model.entryFor(null, PLUGIN_ID), null)
+  assert.strictEqual(Model.entryFor(undefined, PLUGIN_ID), null)
+  assert.strictEqual(Model.entryFor([], PLUGIN_ID), null)
+  assert.strictEqual(Model.entryFor({ bar: { layout: "not an object" } }, PLUGIN_ID), null)
+  assert.strictEqual(Model.entryFor({ plugins: "not an array" }, PLUGIN_ID), null)
+})
+
+// ------------------------------------------------------------- ownEntryFromConfigText
+
+test("ownEntryFromConfigText: valid entry in bar.layout", function () {
+  var text = JSON.stringify({ version: 1, bar: { layout: { left: [{ id: PLUGIN_ID, repoLimit: 7 }] } } })
+  var result = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: { id: PLUGIN_ID, repoLimit: 7 }, error: "" })
+})
+
+test("ownEntryFromConfigText: valid entry in plugins[]", function () {
+  var text = JSON.stringify({ version: 1, plugins: [{ id: PLUGIN_ID, issuesFilter: "all" }] })
+  var result = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: { id: PLUGIN_ID, issuesFilter: "all" }, error: "" })
+})
+
+test("ownEntryFromConfigText: missing own entry", function () {
+  var text = JSON.stringify({ version: 1, bar: { layout: { left: [{ id: "other" }] } } })
+  var result = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: null, error: "missing own entry" })
+})
+
+test("ownEntryFromConfigText: bare-string layout entry -- missing own entry", function () {
+  var text = JSON.stringify({ version: 1, bar: { layout: { left: [PLUGIN_ID] } } })
+  var result = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: null, error: "missing own entry" })
+})
+
+test("ownEntryFromConfigText: invalid JSON", function () {
+  var result = Model.ownEntryFromConfigText("{not json", PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: null, error: "config invalid" })
+})
+
+test("ownEntryFromConfigText: top-level array is rejected", function () {
+  var result = Model.ownEntryFromConfigText("[1,2,3]", PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: null, error: "config invalid" })
+})
+
+test("ownEntryFromConfigText: wrong version is rejected", function () {
+  var text = JSON.stringify({ version: 2, plugins: [{ id: PLUGIN_ID }] })
+  var result = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: null, error: "config invalid" })
+})
+
+test("ownEntryFromConfigText: missing version is rejected", function () {
+  var text = JSON.stringify({ plugins: [{ id: PLUGIN_ID }] })
+  var result = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  assert.deepStrictEqual(result, { entry: null, error: "config invalid" })
+})
+
+test("ownEntryFromConfigText: oversized text is rejected before parsing", function () {
+  var text = JSON.stringify({ version: 1, plugins: [{ id: PLUGIN_ID }] })
+  var result = Model.ownEntryFromConfigText(text, PLUGIN_ID, text.length - 1)
+  assert.deepStrictEqual(result, { entry: null, error: "config too large" })
+})
+
+test("ownEntryFromConfigText: returned entry is a copy -- mutating it does not alter a second call", function () {
+  var text = JSON.stringify({ version: 1, plugins: [{ id: PLUGIN_ID, repoLimit: 9 }] })
+  var first = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  first.entry.repoLimit = 999
+  first.entry.newKey = "mutated"
+  var second = Model.ownEntryFromConfigText(text, PLUGIN_ID, 1048576)
+  assert.strictEqual(second.entry.repoLimit, 9)
+  assert.strictEqual(second.entry.newKey, undefined)
+})
+
 // ---------------------------------------------------------------------- mergedSettings
 
 test("mergedSettings: merges a new/changed key onto the existing entry (does not drop other settings)", function () {

@@ -672,6 +672,58 @@ function summaryTooltip(state) {
 
 // ------------------------------------------------------------- settings persistence
 
+// A service gets only the shell object, not an injected settings prop, so
+// it looks up its own entry: the bar layout first, then plugins[]. Mirrors
+// the host's own updateEntryInline lookup order.
+function entryFor(config, id) {
+  if (!isObject(config)) return null
+  var layout = isObject(config.bar) && isObject(config.bar.layout) ? config.bar.layout : null
+  var sections = ["left", "center", "right"]
+  if (layout) {
+    for (var s = 0; s < sections.length; s++) {
+      var arr = isArray(layout[sections[s]]) ? layout[sections[s]] : []
+      for (var i = 0; i < arr.length; i++) {
+        if (arr[i] && arr[i].id === id) return arr[i]
+      }
+    }
+  }
+  var plugins = isArray(config.plugins) ? config.plugins : []
+  for (var j = 0; j < plugins.length; j++) {
+    if (plugins[j] && plugins[j].id === id) return plugins[j]
+  }
+  return null
+}
+
+// Parses a scoped host's shell.json text into this plugin's own entry only.
+// Every failure mode resolves to a named error instead of throwing. The
+// returned entry is a fresh JSON round trip, independent of the caller.
+function ownEntryFromConfigText(text, id, maxChars) {
+  var s = isString(text) ? text : String(text || "")
+  var cap = typeof maxChars === "number" && maxChars > 0 ? maxChars : 1048576
+  if (s.length > cap) return { entry: null, error: "config too large" }
+
+  var parsed
+  try {
+    parsed = JSON.parse(s)
+  } catch (e) {
+    return { entry: null, error: "config invalid" }
+  }
+  if (!isObject(parsed) || parsed.version !== 1) {
+    return { entry: null, error: "config invalid" }
+  }
+
+  var entry = entryFor(parsed, id)
+  if (!isObject(entry)) return { entry: null, error: "missing own entry" }
+
+  var copy
+  try {
+    copy = JSON.parse(JSON.stringify(entry))
+  } catch (e2) {
+    return { entry: null, error: "config invalid" }
+  }
+  return { entry: copy, error: "" }
+}
+
 // shell.updateEntryInline REPLACES the whole settings entry with exactly
 // the keys handed to it -- it does not merge. Build the full next-state
 // object from `current` first so one changed key never drops the rest.
@@ -707,6 +759,8 @@ if (typeof module !== "undefined" && module.exports) {
     ownerFromNameWithOwner: ownerFromNameWithOwner,
     isExternalOwner: isExternalOwner,
     mergedSettings: mergedSettings,
+    entryFor: entryFor,
+    ownEntryFromConfigText: ownEntryFromConfigText,
     lastComment: lastComment,
     subscribedFromViewerSubscription: subscribedFromViewerSubscription,
     matchesQuery: matchesQuery,

@@ -105,66 +105,138 @@ Item {
     return true
   }
 
-  // Persists issuesFilter via shell.updateEntryInline, which REPLACES the
-  // whole settings entry -- Model.mergedSettings builds current-plus-one-key
-  // so every other setting survives the write.
+  // shell.updateEntryInline REPLACES the whole settings entry -- merge onto
+  // the current settingsEntry so every other setting survives the write.
+  // A null entry is refused below rather than written -- see settingsEntry.
   function setIssuesFilter(mode) {
     var next = validIssuesFilter(mode)
     if (!shell || typeof shell.updateEntryInline !== "function") {
       log("setIssuesFilter: shell.updateEntryInline unavailable -- cannot persist")
-      return
+      return false
     }
-    shell.updateEntryInline("halmylyseas.github-status", Model.mergedSettings(root._settingsEntry, "issuesFilter", next))
+    if (root.settingsEntry === null) {
+      log("setIssuesFilter: no valid settings entry loaded -- refusing to write")
+      return false
+    }
+    shell.updateEntryInline("halmylyseas.github-status", Model.mergedSettings(root.settingsEntry, "issuesFilter", next))
     log("issuesFilter set to " + next)
+    return true
   }
 
-  // Settings: shell.json entry for this plugin, manifest defaults as
-  // fallback. Live bindings off shell.shellConfig are fine here; a
-  // Timer.interval built from one of these must NOT be live (see below).
+  // Settings source, chosen by capability rather than host version: a
+  // full shell config gets the live legacy read below; a capability-
+  // scoped facade has none, so this plugin watches its own entry instead.
 
-  readonly property var _shellConfig: shell ? shell.shellConfig : null
-  readonly property var _settingsEntry: findEntry(_shellConfig, "halmylyseas.github-status")
+  readonly property bool hasLegacyShellConfig:
+    !!shell && typeof shell.shellConfig !== "undefined" && shell.shellConfig !== null
+      && typeof shell.shellConfig === "object" && !Array.isArray(shell.shellConfig)
+  readonly property bool scopedHost: shell !== null && !hasLegacyShellConfig
+  property string configPath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
+
+  property var _scopedEntry: null
+  property string _scopedError: ""
+
+  readonly property var settingsEntry:
+    scopedHost ? _scopedEntry : findEntry(shell ? shell.shellConfig : null, "halmylyseas.github-status")
+  readonly property string settingsDiagnostic: {
+    if (scopedHost) return _scopedError
+    if (!hasLegacyShellConfig) return "missing snapshot"
+    if (!settingsEntry) return "missing own entry"
+    return ""
+  }
+  readonly property string settingsSource: scopedHost ? "scoped" : (hasLegacyShellConfig ? "legacy" : "none")
 
   readonly property int dashboardIntervalSec:
-    clampInt(settingInt(_settingsEntry, "dashboardIntervalSec", manifestDefault("dashboardIntervalSec", 180)), 60, 3600)
+    clampInt(settingInt(settingsEntry, "dashboardIntervalSec", manifestDefault("dashboardIntervalSec", 180)), 60, 3600)
   readonly property int notificationsIntervalSec:
-    clampInt(settingInt(_settingsEntry, "notificationsIntervalSec", manifestDefault("notificationsIntervalSec", 60)), 60, 600)
+    clampInt(settingInt(settingsEntry, "notificationsIntervalSec", manifestDefault("notificationsIntervalSec", 60)), 60, 600)
   readonly property int repoLimit:
-    clampInt(settingInt(_settingsEntry, "repoLimit", manifestDefault("repoLimit", 10)), 3, 30)
+    clampInt(settingInt(settingsEntry, "repoLimit", manifestDefault("repoLimit", 10)), 3, 30)
   readonly property string issuesFilter:
-    validIssuesFilter(settingStr(_settingsEntry, "issuesFilter", manifestDefault("issuesFilter", "focus")))
+    validIssuesFilter(settingStr(settingsEntry, "issuesFilter", manifestDefault("issuesFilter", "focus")))
 
   // A bar-layout entry can be a bare string instead of an object -- that
-  // form renders fine but cannot carry settings. Delayed so shellConfig has
-  // time to move past its transient built-in-defaults state at boot.
+  // renders fine but cannot carry settings. Delayed so a legacy host's
+  // shellConfig has time to move past its transient boot-time state.
   Timer {
     interval: 15000
     running: true
     repeat: false
     onTriggered: {
-      if (root.findEntry(root._shellConfig, "halmylyseas.github-status") === null) {
-        root.log("no config entry found for this plugin -- settings cannot persist, manifest defaults are in effect")
+      if (!root.scopedHost && root.settingsDiagnostic !== "") {
+        root.log("settings diagnostic: " + root.settingsDiagnostic + " -- manifest defaults are in effect")
       }
     }
   }
 
+  // Change-driven, unlike the legacy timer above: a scoped diagnostic can
+  // flip at any time from an external shell.json edit, so it logs once per
+  // real transition instead of waiting on a fixed delay.
+  onSettingsDiagnosticChanged: {
+    if (root.scopedHost && root.settingsDiagnostic !== "") {
+      root.log("settings diagnostic: " + root.settingsDiagnostic + " -- manifest defaults are in effect")
+    }
+  }
+
+  onScopedHostChanged: {
+    if (root.scopedHost) {
+      Qt.callLater(root.refreshScopedSettings)
+    } else {
+      root._scopedEntry = null
+      root._scopedError = ""
+    }
+  }
+
+  onConfigPathChanged: if (root.scopedHost) Qt.callLater(root.refreshScopedSettings)
+
+  // The host injects `shell` after creation, so the ready line below logs
+  // pre-injection defaults; the effective values are logged here instead.
+  onSettingsEntryChanged: {
+    log("settings applied (source=" + root.settingsSource
+      + " dashboardIntervalSec=" + root.dashboardIntervalSec
+      + " notificationsIntervalSec=" + root.notificationsIntervalSec
+      + " repoLimit=" + root.repoLimit
+      + " issuesFilter=" + root.issuesFilter + ")")
+  }
+
+  function refreshScopedSettings() {
+    if (!root.scopedHost) return
+    scopedSettingsFile.reload()
+    scopedSettingsFile.text()
+  }
+
+  function clearScopedSettings(reason) {
+    root._scopedEntry = null
+    root._scopedError = reason
+  }
+
+  function loadScopedSettings(raw) {
+    if (!root.scopedHost) return
+    var result = Model.ownEntryFromConfigText(String(raw || ""), "halmylyseas.github-status", 1048576)
+    if (result.error !== "") {
+      clearScopedSettings(result.error)
+      return
+    }
+    root._scopedEntry = result.entry
+    root._scopedError = ""
+  }
+
+  // Read-only watch on the host's own shell.json: preload stays false and
+  // this plugin never calls setText, so startup never writes anything.
+  FileView {
+    id: scopedSettingsFile
+    path: root.configPath
+    preload: false
+    blockLoading: false
+    watchChanges: root.scopedHost
+    printErrors: false
+    onLoaded: root.loadScopedSettings(text())
+    onLoadFailed: root.clearScopedSettings("config load failed")
+    onFileChanged: root.refreshScopedSettings()
+  }
+
   function findEntry(config, id) {
-    if (!config) return null
-    var layout = config.bar && config.bar.layout ? config.bar.layout : null
-    var sections = ["left", "center", "right"]
-    if (layout) {
-      for (var s = 0; s < sections.length; s++) {
-        var arr = layout[sections[s]] || []
-        for (var i = 0; i < arr.length; i++) {
-          if (arr[i] && arr[i].id === id) return arr[i]
-        }
-      }
-    }
-    var plugins = config.plugins || []
-    for (var j = 0; j < plugins.length; j++) {
-      if (plugins[j] && plugins[j].id === id) return plugins[j]
-    }
-    return null
+    return Model.entryFor(config, id)
   }
 
   function settingInt(entry, key, fallback) {
@@ -1090,7 +1162,9 @@ Item {
   }
 
   Component.onCompleted: {
+    if (root.scopedHost) Qt.callLater(root.refreshScopedSettings)
     log("service ready (pluginDir=" + root.pluginDir
+      + " settingsSource=" + root.settingsSource
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
       + " notificationsIntervalSec=" + root.notificationsIntervalSec
       + " repoLimit=" + root.repoLimit
