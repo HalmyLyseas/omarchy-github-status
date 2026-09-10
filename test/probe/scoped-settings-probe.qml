@@ -21,6 +21,7 @@ ShellRoot {
   property var barWidget: null
   property var shellApi: null
   property var updateSettingsCalls: []
+  property int _settingsEntryChangeCount: 0
   property var currentEntry: ({
     id: pluginId, dashboardIntervalSec: 300, notificationsIntervalSec: 120,
     repoLimit: 5, issuesFilter: "all", sibling: "kept"
@@ -75,6 +76,9 @@ ShellRoot {
       if (id !== root.pluginId) return false
       var next = { id: id }
       for (var key in settings) if (key !== "id") next[key] = settings[key]
+      // The host skips a no-op write -- mirror that so it neither persists
+      // nor counts as a call.
+      if (JSON.stringify(next) === JSON.stringify(root.currentEntry)) return false
       root.currentEntry = next
       root.updateSettingsCalls = root.updateSettingsCalls.concat([next])
       root.writeEntry(next)
@@ -96,6 +100,7 @@ ShellRoot {
     s.notificationsTimeoutMs = 1500
     s.reProbeMs = 800
     s.shell = root.shellApi
+    s.settingsEntryChanged.connect(function () { root._settingsEntryChangeCount++ })
     root.service = s
     return s
   }
@@ -183,7 +188,38 @@ ShellRoot {
       // syncPluginApis(), never by an inline write -- it must still read
       // the very first seeded value even after two real-entry updates.
       check("facade snapshot stays stale", root.shellApi.barConfig.layout.right[0].repoLimit === 5)
-      root.invalidFile(p)
+      root.unrelatedWrite(p)
+    })
+  }
+
+  // Writes a sibling entry while ours stays byte-identical, then a second
+  // write that does change ours -- the combined count must advance by
+  // exactly one, proving the unrelated reload alone caused no change.
+  function unrelatedWrite(p) {
+    var ownEntry = {
+      id: root.pluginId, dashboardIntervalSec: 300, notificationsIntervalSec: 120,
+      repoLimit: 7, issuesFilter: "focus", sibling: "kept"
+    }
+    var before = root._settingsEntryChangeCount
+    var doc = {
+      version: 1,
+      bar: { layout: { left: [{ id: "acme.other", foo: 1 }], center: [], right: [ownEntry] } },
+      plugins: []
+    }
+    configWriter.setText(JSON.stringify(doc))
+    // Settle so the two writes cannot coalesce into one reload; a wrongly
+    // firing unrelated reload then shows up as a second increment.
+    root._waitUntil(function () { return false }, 700, function () {
+      var afterUnrelated = root._settingsEntryChangeCount
+      root.writeEntry({
+        id: root.pluginId, dashboardIntervalSec: 300, notificationsIntervalSec: 120,
+        repoLimit: 8, issuesFilter: "focus", sibling: "kept"
+      })
+      root._waitUntil(function () { return root.service.repoLimit === 8 }, 4000, function (timedOut) {
+        check("unrelated config write leaves settings untouched",
+          !timedOut && afterUnrelated === before && root._settingsEntryChangeCount === before + 1)
+        root.invalidFile(p)
+      })
     })
   }
 

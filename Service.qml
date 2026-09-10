@@ -192,6 +192,7 @@ Item {
   // The host injects `shell` after creation, so the ready line below logs
   // pre-injection defaults; the effective values are logged here instead.
   onSettingsEntryChanged: {
+    if (!root.shell) return
     log("settings applied (source=" + root.settingsSource
       + " dashboardIntervalSec=" + root.dashboardIntervalSec
       + " notificationsIntervalSec=" + root.notificationsIntervalSec
@@ -217,7 +218,11 @@ Item {
       clearScopedSettings(result.error)
       return
     }
-    root._scopedEntry = result.entry
+    // Reassigning on every reload would fire settingsEntryChanged for any
+    // unrelated write to the shared file -- only replace on a real diff.
+    if (JSON.stringify(result.entry) !== JSON.stringify(root._scopedEntry)) {
+      root._scopedEntry = result.entry
+    }
     root._scopedError = ""
   }
 
