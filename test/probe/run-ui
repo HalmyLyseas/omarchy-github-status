@@ -171,6 +171,10 @@ else
     || not_ok "ok: bar hasAttention===false (got: $(field "$json" hasAttention))"
   [[ "$(field "$json" tooltipSummary)" == "GitHub Status — 1 PR" ]] && ok "ok: bar tooltipSummary reads \"GitHub Status — 1 PR\"" \
     || not_ok "ok: bar tooltipSummary reads \"GitHub Status — 1 PR\" (got: $(field "$json" tooltipSummary))"
+  [[ "$(field "$json" settingsSource)" == "legacy" ]] && ok "ok: svc.settingsSource===\"legacy\" (stub shellConfig pins the pre-scoped-facade path)" \
+    || not_ok "ok: svc.settingsSource===\"legacy\" (got: $(field "$json" settingsSource))"
+  [[ "$(field "$json" scopedHost)" == "false" ]] && ok "ok: svc.scopedHost===false" \
+    || not_ok "ok: svc.scopedHost===false (got: $(field "$json" scopedHost))"
 fi
 check_no_engine_errors "$log" "ok"
 check_no_orphans "$mocklog" "ok"

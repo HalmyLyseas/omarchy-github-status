@@ -53,10 +53,12 @@ jobs:
           # bsdtar is always present in this container (it ships in
           # libarchive, a hard dependency of pacman itself), and the package
           # has no .INSTALL scriptlet, so nothing is lost by never running
-          # `pacman -S omarchy`.
+          # `pacman -S omarchy`. The package is architecture-specific (not
+          # `any`), so the glob's trailing segment matches whichever arch
+          # this runner's pacman resolved.
           pacman -Swdd --noconfirm omarchy
           shopt -s nullglob
-          pkgs=(/var/cache/pacman/pkg/omarchy-[0-9]*-any.pkg.tar.zst)
+          pkgs=(/var/cache/pacman/pkg/omarchy-[0-9]*-*.pkg.tar.zst)
           if [[ ${#pkgs[@]} -ne 1 ]]; then
             echo "expected exactly one omarchy package archive, found ${#pkgs[@]}: ${pkgs[*]}" >&2
             exit 1
@@ -89,6 +91,9 @@ jobs:
       - name: Node unit tests (Model.js, QML Text-sink audit, comment hygiene)
         run: node --test test/*.test.js
 
+      - name: Host contract (read-only; pins the scoped facade API)
+        run: node test/host-contract.mjs
+
       - name: CLI contract (read-only; skips cleanly without a real authenticated gh)
         run: node test/cli-contract.mjs
 
@@ -103,3 +108,4 @@ jobs:
           mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
           cage -- bash test/probe/run
           cage -- bash test/probe/run-ui
+          cage -- bash test/probe/run-scoped-settings

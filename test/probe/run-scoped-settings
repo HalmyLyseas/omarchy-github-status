@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# test/probe/run-scoped-settings -- scoped-host settings probe: loads the
+# real installed PluginShellApi facade plus the real Service.qml/BarWidget.qml
+# against an isolated temp HOME's own shell.json. Skips without `qs`.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MOCKS="$PLUGIN_DIR/test/mocks"
+MOCK_GH="$MOCKS/gh"
+OUT_DIR="$(mktemp -d)"
+trap 'rm -rf "$OUT_DIR"' EXIT
+
+fail_count=0
+pass_count=0
+ok() { pass_count=$((pass_count + 1)); echo "ok - $1"; }
+not_ok() { fail_count=$((fail_count + 1)); echo "NOT OK - $1"; }
+
+if ! command -v qs >/dev/null 2>&1; then
+  echo "test/probe/run-scoped-settings: no \`qs\` on PATH (no Wayland session?) -- skipping scoped-settings probe suite"
+  exit 0
+fi
+
+# qs.Commons/qs.Ui resolve through this symlink -- same convention as
+# test/probe/run-ui, since BarWidget.qml/Panel.qml import them.
+QMLROOT="$OUT_DIR/qmlroot"
+mkdir -p "$QMLROOT"
+ln -sfn /usr/share/omarchy/shell "$QMLROOT/qs"
+
+# Isolated HOME so Service.qml's default configPath (`$HOME/.config/
+# omarchy/shell.json`) never resolves to this machine's real file, and a
+# login shell's re-derived PATH (`bash -lc`) never sees a real `gh`.
+HOME_DIR="$OUT_DIR/home"
+BIN_DIR="$OUT_DIR/bin"
+mkdir -p "$HOME_DIR/.config/omarchy" "$BIN_DIR"
+printf 'PATH="%s:/usr/bin:/bin"\n' "$BIN_DIR" > "$HOME_DIR/.bash_profile"
+
+LOG="$OUT_DIR/result.log"
+MOCKLOG="$OUT_DIR/result.mock.log"
+: > "$MOCKLOG"
+env GHS_PLUGIN_DIR="$PLUGIN_DIR" GHS_GHPATH="$MOCK_GH" GH_MOCK_MODE=ok GH_MOCK_LOG="$MOCKLOG" \
+  QML_IMPORT_PATH="$QMLROOT" HOME="$HOME_DIR" PATH="$BIN_DIR:/usr/bin:/bin" \
+  timeout 30 qs -n -p "$PLUGIN_DIR/test/probe/scoped-settings-probe.qml" >"$LOG" 2>&1
+code=$?
+cat "$LOG"
+
+json_line() { grep -o 'PROBE_RESULT .*' "$1" | tail -n1 | sed 's/^PROBE_RESULT //'; }
+json="$(json_line "$LOG")"
+
+field() {
+  node -e '
+    try {
+      const data = JSON.parse(process.argv[1]);
+      const v = data[process.argv[2]];
+      process.stdout.write(v === undefined || v === null ? "" : String(v));
+    } catch (e) { process.stdout.write(""); }
+  ' "$1" "$2"
+}
+
+check_named() {
+  node -e '
+    try {
+      const data = JSON.parse(process.argv[1]);
+      const c = (data.checks || []).find(x => x.name === process.argv[2]);
+      process.stdout.write(c ? (c.pass ? "pass" : "fail") : "missing");
+    } catch (e) { process.stdout.write("missing"); }
+  ' "$1" "$2"
+}
+
+# A dead-but-unreaped mock lingers as zombie "Z" where no init reaps it --
+# state is what counts, not kill -0. Same convention as test/probe/run.
+alive() {
+  local pid="$1" state
+  state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)" || return 1
+  [[ -n "$state" && "$state" != "Z" && "$state" != "X" ]]
+}
+settled_alive() {
+  local pid="$1" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    alive "$pid" || return 1
+    sleep 0.2
+  done
+  return 0
+}
+check_no_orphans() {
+  local pids leaked=0
+  pids="$(grep -oP '^PID=\K[0-9]+' "$MOCKLOG" 2>/dev/null | sort -u)"
+  for pid in $pids; do
+    if settled_alive "$pid"; then
+      leaked=1
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 0.2
+      alive "$pid" && kill -9 "$pid" 2>/dev/null || true
+      echo "  orphan: PID $pid was still alive after qs exited (killed by test/probe/run-scoped-settings)"
+    fi
+  done
+  if [[ $leaked -eq 1 ]]; then
+    not_ok "scoped-settings: no orphaned mock process left behind"
+  else
+    ok "scoped-settings: no orphaned mock process left behind"
+  fi
+}
+
+[[ "$code" == "0" ]] && ok "scoped-settings: qs exited 0 (not a crash/timeout, got $code)" \
+  || not_ok "scoped-settings: qs exited 0 (not a crash/timeout, got exit code: ${code:-unknown})"
+
+err_count="$(grep -c 'TypeError\|ReferenceError\|ERROR:' "$LOG" 2>/dev/null)"
+if [[ "${err_count:-0}" -eq 0 ]]; then
+  ok "scoped-settings: 0 TypeError/ReferenceError/QML load ERROR in the log"
+else
+  not_ok "scoped-settings: 0 TypeError/ReferenceError/QML load ERROR in the log (got $err_count)"
+  grep 'TypeError\|ReferenceError\|ERROR:' "$LOG" | head -5 | sed 's/^/    /'
+fi
+
+if [[ -z "$json" ]]; then
+  not_ok "scoped-settings: probe printed a PROBE_RESULT line"
+else
+  ok "scoped-settings: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" note)" == "" ]] && ok "scoped-settings: no harness-level note/timeout" \
+    || not_ok "scoped-settings: no harness-level note/timeout (got: $(field "$json" note))"
+
+  REQUIRED_CHECKS=(
+    "scoped host"
+    "initial non-default values"
+    "no write at boot"
+    "toggle merges siblings"
+    "service follows persisted write"
+    "panel follows service"
+    "external edit propagates"
+    "facade snapshot stays stale"
+    "invalid file falls back to defaults with diagnostic"
+    "write refused while invalid"
+    "deleted file falls back"
+    "recreated file restores"
+    "service recreate followed by panel"
+  )
+  for name in "${REQUIRED_CHECKS[@]}"; do
+    status="$(check_named "$json" "$name")"
+    [[ "$status" == "pass" ]] && ok "scoped-settings: $name" || not_ok "scoped-settings: $name (status: $status)"
+  done
+
+  [[ "$(field "$json" failed)" == "0" ]] && ok "scoped-settings: probe reports zero failed checks overall" \
+    || not_ok "scoped-settings: probe reports zero failed checks overall (got $(field "$json" failed))"
+fi
+
+check_no_orphans
+
+echo
+if [[ "$fail_count" -eq 0 ]]; then
+  echo "test/probe/run-scoped-settings: ALL CHECKS PASSED ($pass_count ok)"
+else
+  echo "test/probe/run-scoped-settings: $fail_count FAILURE(S), $pass_count ok"
+fi
+exit $(( fail_count > 0 ? 1 : 0 ))

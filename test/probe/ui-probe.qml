@@ -28,7 +28,16 @@ ShellRoot {
   QtObject {
     id: stubShell
     property var svcInstance: null
-    property var shellConfig: []
+    // Legacy-shaped plain object (pre-scoped-facade host): pins svc to the
+    // "legacy" settings source so this suite never touches the real
+    // ~/.config/omarchy/shell.json through the scoped-read fallback.
+    property var shellConfig: ({
+      version: 1,
+      bar: { layout: { right: [
+        { id: "halmylyseas.github-status", dashboardIntervalSec: 180, notificationsIntervalSec: 60, repoLimit: 10, issuesFilter: "focus" }
+      ] } },
+      plugins: []
+    })
     property var updateEntryInlineCalls: []
     function serviceFor(id) { return id === "halmylyseas.github-status" ? stubShell.svcInstance : null }
     function updateEntryInline(id, entry) {
@@ -227,7 +236,9 @@ ShellRoot {
       reposPill: reposHeader ? reposHeader.pillLabel : null,
       unreadCount: barWidget.unreadCount,
       hasAttention: barWidget.hasAttention,
-      tooltipSummary: barWidget.tooltipSummary
+      tooltipSummary: barWidget.tooltipSummary,
+      settingsSource: svc.settingsSource,
+      scopedHost: svc.scopedHost
     })
   }
 

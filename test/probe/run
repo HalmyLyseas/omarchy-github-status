@@ -137,6 +137,10 @@ else
   etag_sent="$(grep -c 'If-None-Match: "mock-etag-v1"' "$mocklog" 2>/dev/null)"
   [[ "${etag_sent:-0}" -ge 1 ]] && ok "ok: ETag captured and sent on the second notifications poll" \
     || not_ok "ok: ETag captured and sent on the second notifications poll (mock log had no If-None-Match)"
+  [[ "$(field "$json" dashboardIntervalSec)" == "300" ]] && ok "ok: dashboardIntervalSec===300 (legacy shellConfig entry)" \
+    || not_ok "ok: dashboardIntervalSec===300 (got $(field "$json" dashboardIntervalSec))"
+  [[ "$(field "$json" settingsSource)" == "legacy" ]] && ok "ok: settingsSource===\"legacy\" (pins the pre-scoped-facade path)" \
+    || not_ok "ok: settingsSource===\"legacy\" (got: $(field "$json" settingsSource))"
 fi
 check_no_orphans "$mocklog" "ok"
 check_exit_status "ok"

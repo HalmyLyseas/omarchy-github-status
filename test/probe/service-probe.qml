@@ -20,12 +20,28 @@ ShellRoot {
   property string linkPath: Quickshell.env("GHS_LINK_PATH")
   property string mockPath: Quickshell.env("GHS_MOCK_PATH")
 
+  // Legacy-shaped stub shell: a live full shellConfig with a real own
+  // entry, pinning every scenario onto the pre-scoped-facade settings path
+  // so `dashboardIntervalSec`/`settingsSource` reflect it, not defaults.
+  QtObject {
+    id: shellStub
+    property var shellConfig: ({
+      version: 1,
+      bar: { layout: { right: [
+        { id: "halmylyseas.github-status", dashboardIntervalSec: 300 }
+      ] } },
+      plugins: []
+    })
+    function updateEntryInline(id, settings) { return false }
+  }
+
   Loader {
     id: loader
     source: "file://" + probeRoot.pluginDir + "/Service.qml"
     active: true
     onLoaded: {
       probeRoot.service = item
+      item.shell = shellStub
       if (probeRoot.ghPathOverride) item.ghPath = probeRoot.ghPathOverride
       item.ghPathTimeoutMs = 1500
       item.ghVersionTimeoutMs = 1500
@@ -214,6 +230,8 @@ ShellRoot {
       dashboardPartial: service.dashboardPartial,
       ghPath: service.ghPath,
       ghVersion: service.ghVersion,
+      dashboardIntervalSec: service.dashboardIntervalSec,
+      settingsSource: service.settingsSource,
       ghVersionSupported: service.ghVersionSupported,
       dashboardStatus: debugProp("_dashboardStatus"),
       notifStatus: debugProp("_notifStatus"),

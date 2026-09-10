@@ -21,6 +21,11 @@ node --test "$SCRIPT_DIR/comment-hygiene.test.js"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo
+echo "== host-contract.mjs (read-only; skips cleanly without an installed shell tree) =="
+node "$SCRIPT_DIR/host-contract.mjs"
+if [[ $? -ne 0 ]]; then overall=1; fi
+
+echo
 echo "== cli-contract.mjs (read-only; skips cleanly without a real authenticated gh) =="
 node "$SCRIPT_DIR/cli-contract.mjs"
 if [[ $? -ne 0 ]]; then overall=1; fi
@@ -33,6 +38,11 @@ if [[ $? -ne 0 ]]; then overall=1; fi
 echo
 echo "== test/probe/run-ui (UI probe suite) =="
 bash "$SCRIPT_DIR/probe/run-ui"
+if [[ $? -ne 0 ]]; then overall=1; fi
+
+echo
+echo "== test/probe/run-scoped-settings (scoped-host settings probe suite) =="
+bash "$SCRIPT_DIR/probe/run-scoped-settings"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo
