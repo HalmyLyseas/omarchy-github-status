@@ -120,8 +120,8 @@ UI in this version):
 | Subscribed only | Focus | Focus / All | Whether My open issues shows only issues you're still subscribed to (Focus) or every open issue you authored (All) — also toggleable from the panel's **Subscribed** chip in the My open issues section header. |
 
 A changed value is picked up within a few seconds, no shell restart needed;
-a changed poll interval takes effect from the next poll, not the one already
-scheduled.
+a changed poll interval starts a fresh countdown immediately — no shell
+restart, no extra request.
 
 ## API usage
 
