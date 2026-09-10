@@ -171,6 +171,8 @@ else
     || not_ok "ok: bar hasAttention===false (got: $(field "$json" hasAttention))"
   [[ "$(field "$json" tooltipSummary)" == "GitHub Status — 1 PR" ]] && ok "ok: bar tooltipSummary reads \"GitHub Status — 1 PR\"" \
     || not_ok "ok: bar tooltipSummary reads \"GitHub Status — 1 PR\" (got: $(field "$json" tooltipSummary))"
+  [[ "$(field "$json" statusSeverity)" == "ok" ]] && ok "ok: bar statusSeverity===\"ok\"" \
+    || not_ok "ok: bar statusSeverity===\"ok\" (got: $(field "$json" statusSeverity))"
   [[ "$(field "$json" settingsSource)" == "legacy" ]] && ok "ok: svc.settingsSource===\"legacy\" (stub shellConfig pins the pre-scoped-facade path)" \
     || not_ok "ok: svc.settingsSource===\"legacy\" (got: $(field "$json" settingsSource))"
   [[ "$(field "$json" scopedHost)" == "false" ]] && ok "ok: svc.scopedHost===false" \
@@ -182,7 +184,7 @@ check_exit_status "ok"
 
 echo
 echo "== (2) degraded ladder: unauthenticated / no-gh / offline / rate-limited =="
-for pair in "unauthenticated:unauthenticated" "offline:offline" "rate-limited:rate-limited"; do
+for pair in "unauthenticated:unauthenticated" "offline:offline" "rate-limited:rate-limited" "api-error:api-error"; do
   label="degraded-${pair%%:*}"
   mode="${pair##*:}"
   log="$(run_scenario "$label" degraded GH_MOCK_MODE="$mode" GHS_GHPATH="$MOCK_GH")"
@@ -204,16 +206,30 @@ for pair in "unauthenticated:unauthenticated" "offline:offline" "rate-limited:ra
   check_exit_status "$label"
 done
 # statusHintSevere: only no-gh/unauthenticated are severe (urgent-colored);
-# offline/rate-limited are not, even though both also show a hint.
+# offline/rate-limited/api-error are not, even though all show a hint.
 json="$(json_line "$OUT_DIR/degraded-unauthenticated.log")"
 [[ "$(field "$json" statusHintSevere)" == "true" ]] && ok "degraded-unauthenticated: statusHintSevere=true" \
   || not_ok "degraded-unauthenticated: statusHintSevere=true (got: $(field "$json" statusHintSevere))"
+[[ "$(field "$json" statusSeverity)" == "severe" ]] && ok "degraded-unauthenticated: statusSeverity=severe" \
+  || not_ok "degraded-unauthenticated: statusSeverity=severe (got: $(field "$json" statusSeverity))"
 json="$(json_line "$OUT_DIR/degraded-offline.log")"
 [[ "$(field "$json" statusHintSevere)" == "false" ]] && ok "degraded-offline: statusHintSevere=false" \
   || not_ok "degraded-offline: statusHintSevere=false (got: $(field "$json" statusHintSevere))"
+[[ "$(field "$json" statusSeverity)" == "warn" ]] && ok "degraded-offline: statusSeverity=warn" \
+  || not_ok "degraded-offline: statusSeverity=warn (got: $(field "$json" statusSeverity))"
 json="$(json_line "$OUT_DIR/degraded-rate-limited.log")"
 [[ "$(field "$json" statusHintSevere)" == "false" ]] && ok "degraded-rate-limited: statusHintSevere=false" \
   || not_ok "degraded-rate-limited: statusHintSevere=false (got: $(field "$json" statusHintSevere))"
+json="$(json_line "$OUT_DIR/degraded-api-error.log")"
+[[ "$(field "$json" statusHintSevere)" == "false" ]] && ok "degraded-api-error: statusHintSevere=false" \
+  || not_ok "degraded-api-error: statusHintSevere=false (got: $(field "$json" statusHintSevere))"
+[[ "$(field "$json" statusSeverity)" == "warn" ]] && ok "degraded-api-error: statusSeverity=warn" \
+  || not_ok "degraded-api-error: statusSeverity=warn (got: $(field "$json" statusSeverity))"
+[[ "$(field "$json" statusHint)" == "GitHub API error"* ]] && ok "degraded-api-error: statusHint starts with \"GitHub API error\"" \
+  || not_ok "degraded-api-error: statusHint starts with \"GitHub API error\" (got: $(field "$json" statusHint))"
+[[ "$(field "$json" tooltipSummary)" == "GitHub Status — GitHub API error"* ]] \
+  && ok "degraded-api-error: tooltipSummary starts with \"GitHub Status — GitHub API error\"" \
+  || not_ok "degraded-api-error: tooltipSummary starts with \"GitHub Status — GitHub API error\" (got: $(field "$json" tooltipSummary))"
 
 echo
 echo "== (2b) degraded ladder: no-gh (ghPath never resolves; HOME-isolated login shell) =="

@@ -59,6 +59,10 @@ if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
       echo "gh: mock generic failure" >&2
       exit 1
       ;;
+    api-error)
+      echo "gh: Server Error (HTTP 502)" >&2
+      exit 1
+      ;;
     *)
       echo "HalmyLyseas"
       exit 0
@@ -88,6 +92,10 @@ if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
       ;;
     fail)
       echo "gh: mock generic failure" >&2
+      exit 1
+      ;;
+    api-error)
+      echo "gh: Server Error (HTTP 502)" >&2
       exit 1
       ;;
     partial)
@@ -148,6 +156,10 @@ if [[ "${1:-}" == "api" && "${2:-}" == "-i" && "${3:-}" == "notifications" ]]; t
       ;;
     fail)
       echo "gh: mock generic failure" >&2
+      exit 1
+      ;;
+    api-error)
+      echo "gh: Server Error (HTTP 502)" >&2
       exit 1
       ;;
     notif-garbage)

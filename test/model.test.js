@@ -1162,6 +1162,53 @@ test("classifyFailure: unrecognized shape falls back to generic error", function
   assert.strictEqual(Model.classifyFailure(null, 2), "error")
 })
 
+test("classifyFailure: watchdog timeout (exit 124 / \"timed out\") reads as offline, not an API error", function () {
+  assert.strictEqual(Model.classifyFailure("timed out", 124), "offline")
+  assert.strictEqual(Model.classifyFailure("anything", 124), "offline")
+})
+
+test("classifyFailure: output-overflow kill (exit 137 / \"output limit exceeded\") stays a genuine API error", function () {
+  assert.strictEqual(Model.classifyFailure("output limit exceeded", 137), "error")
+})
+
+// -------------------------------------------------------------------- apiErrorDetail
+
+test("apiErrorDetail: extracts the HTTP status from a gh error line", function () {
+  assert.strictEqual(Model.apiErrorDetail("gh: Server Error (HTTP 502)", 1), "HTTP 502")
+})
+
+test("apiErrorDetail: finds the HTTP status on a later line of multi-line stderr", function () {
+  var stderr = "gh: request to api.github.com failed\ngh: Server Error (HTTP 503)\nretrying..."
+  assert.strictEqual(Model.apiErrorDetail(stderr, 1), "HTTP 503")
+})
+
+test("apiErrorDetail: control characters stripped from oversized input, never exceeds 48 chars", function () {
+  // Neither label template can realistically reach 48 chars for any real
+  // exit code -- this is a defensive bound on oversized/control-laden
+  // input, not a case where truncate()'s cap actually engages.
+  var noisy = "gh: \x00\x01\x1b[31merror\x1b[0m " + "x".repeat(2048)
+  var detail = Model.apiErrorDetail(noisy, 1)
+  assert.ok(detail.length <= 48, "detail should never exceed 48 chars, got " + detail.length)
+  assert.ok(!/[\x00-\x1f\x7f]/.test(detail), "detail must not contain control characters")
+})
+
+test("apiErrorDetail: no HTTP status falls back to the exit code", function () {
+  assert.strictEqual(Model.apiErrorDetail("gh: mock generic failure", 1), "request failed (exit 1)")
+})
+
+test("apiErrorDetail: output-overflow kill (exit 137) reports \"response too large\"", function () {
+  assert.strictEqual(Model.apiErrorDetail("output limit exceeded", 137), "response too large")
+  assert.strictEqual(Model.apiErrorDetail("anything", 137), "response too large")
+})
+
+test("apiErrorDetail: non-string input never throws", function () {
+  assert.doesNotThrow(function () { Model.apiErrorDetail(null, 1) })
+  assert.doesNotThrow(function () { Model.apiErrorDetail(undefined, undefined) })
+  assert.doesNotThrow(function () { Model.apiErrorDetail(42, "not a number") })
+  assert.doesNotThrow(function () { Model.apiErrorDetail({}, null) })
+  assert.strictEqual(Model.apiErrorDetail(null, 1), "request failed (exit 1)")
+})
+
 // -------------------------------------------------------------------- gh version pin
 
 test("SUPPORTED_GH_MAJORS: pinned exact literal (a mutated table must not pass its own test)", function () {

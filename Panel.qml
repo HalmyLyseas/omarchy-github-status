@@ -222,6 +222,12 @@ Panel {
         base = "Rate-limited — resuming" + (until ? " at " + until : " shortly") + ". Showing last-known data."
         break
       }
+      case "api-error": {
+        var detail = svc.apiErrorDetail
+        base = "GitHub API error" + (detail ? " — " + detail : "")
+          + ". Showing last-known data; retrying automatically."
+        break
+      }
       default: base = ""
     }
     // Appended, not replacing, whatever the status ladder above already

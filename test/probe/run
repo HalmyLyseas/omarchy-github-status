@@ -305,11 +305,91 @@ if [[ -z "$json" ]]; then
 else
   ok "offline: probe printed a PROBE_RESULT line"
   [[ "$(field "$json" status)" == "offline" ]] && ok "offline: status=offline" || not_ok "offline: status=offline (got: $(field "$json" status))"
+  [[ "$(field "$json" _reProbeArmed)" == "true" ]] && ok "offline: re-probe timer armed after the probe failure" \
+    || not_ok "offline: re-probe timer armed after the probe failure (got: $(field "$json" _reProbeArmed))"
 fi
 check_no_orphans "$mocklog" "offline"
 check_exit_status "offline"
 check_no_engine_errors "$log" "offline"
 check_no_note "offline" "$json"
+
+echo
+echo "== api-error-at-probe: the auth probe itself gets the 502, not just a later poll =="
+log="$(run_scenario api-error-at-probe GH_MOCK_MODE=api-error GHS_GHPATH="$MOCK_PATH")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/api-error-at-probe.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "api-error-at-probe: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "api-error-at-probe: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "api-error" ]] && ok "api-error-at-probe: status=api-error" \
+    || not_ok "api-error-at-probe: status=api-error (got: $(field "$json" status))"
+  detail="$(field "$json" apiErrorDetail)"
+  [[ "$detail" == *"dashboard: HTTP 502"* && "$detail" == *"notifications: HTTP 502"* && "$detail" != *"probe:"* ]] \
+    && ok "api-error-at-probe: apiErrorDetail names both sources and excludes probe: ($detail)" \
+    || not_ok "api-error-at-probe: apiErrorDetail names both sources and excludes probe: (got: $detail)"
+  graphql_calls="$(grep -c 'ARGV: api graphql' "$mocklog" 2>/dev/null || echo 0)"
+  notif_calls="$(grep -c 'ARGV: api -i notifications' "$mocklog" 2>/dev/null || echo 0)"
+  [[ "${graphql_calls:-0}" -ge 1 && "${notif_calls:-0}" -ge 1 ]] \
+    && ok "api-error-at-probe: pollers started despite the failed probe (graphql=$graphql_calls, notifications=$notif_calls)" \
+    || not_ok "api-error-at-probe: pollers started despite the failed probe (graphql=$graphql_calls, notifications=$notif_calls)"
+  [[ "$(field "$json" _reProbeArmed)" == "true" ]] && ok "api-error-at-probe: re-probe timer armed, same as offline" \
+    || not_ok "api-error-at-probe: re-probe timer armed, same as offline (got: $(field "$json" _reProbeArmed))"
+fi
+check_no_orphans "$mocklog" "api-error-at-probe"
+check_exit_status "api-error-at-probe"
+check_no_engine_errors "$log" "api-error-at-probe"
+check_no_note "api-error-at-probe" "$json"
+
+echo
+echo "== api-error: ok -> mode flips to api-error on refresh() -- last-good data kept =="
+mode_file_apierr="$OUT_DIR/api-error.mode"
+log="$(run_scenario api-error GH_MOCK_MODE=ok GH_MOCK_MODE_FILE="$mode_file_apierr" \
+  GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=api-error GHS_MODE_FILE="$mode_file_apierr")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/api-error.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "api-error: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "api-error: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "api-error" ]] && ok "api-error: status=api-error" \
+    || not_ok "api-error: status=api-error (got: $(field "$json" status))"
+  detail="$(field "$json" apiErrorDetail)"
+  [[ "$detail" == *"dashboard: HTTP 502"* && "$detail" == *"notifications: HTTP 502"* ]] \
+    && ok "api-error: apiErrorDetail names HTTP 502 for both sources ($detail)" \
+    || not_ok "api-error: apiErrorDetail names HTTP 502 for both sources (got: $detail)"
+  [[ "$(field "$json" openPRsLength)" == "1" ]] && ok "api-error: openPRs.length still 1 (last-good data kept)" \
+    || not_ok "api-error: openPRs.length still 1 (got $(field "$json" openPRsLength))"
+  [[ "$(field "$json" reposLength)" == "7" ]] && ok "api-error: repos.length still 7 (last-good data kept)" \
+    || not_ok "api-error: repos.length still 7 (got $(field "$json" reposLength))"
+  [[ "$(field "$json" statusSeverity)" == "warn" ]] && ok "api-error: statusSeverity=warn" \
+    || not_ok "api-error: statusSeverity=warn (got: $(field "$json" statusSeverity))"
+fi
+check_no_orphans "$mocklog" "api-error"
+check_exit_status "api-error"
+check_no_engine_errors "$log" "api-error"
+check_no_note "api-error" "$json"
+
+echo
+echo "== api-error -> recovery: mode flips back to ok, apiErrorDetail clears =="
+mode_file_apierr2="$OUT_DIR/api-error-recover.mode"
+log="$(run_scenario api-error-recover GH_MOCK_MODE=ok GH_MOCK_MODE_FILE="$mode_file_apierr2" \
+  GHS_GHPATH="$MOCK_PATH" GHS_SCENARIO=api-error-recover GHS_MODE_FILE="$mode_file_apierr2")"
+json="$(json_line "$log")"
+mocklog="$OUT_DIR/api-error-recover.mock.log"
+if [[ -z "$json" ]]; then
+  not_ok "api-error-recover: probe printed a PROBE_RESULT line"; cat "$log"
+else
+  ok "api-error-recover: probe printed a PROBE_RESULT line"
+  [[ "$(field "$json" status)" == "ok" ]] && ok "api-error-recover: recovered to status=ok after the mock flipped back to ok" \
+    || not_ok "api-error-recover: recovered to status=ok (got: $(field "$json" status))"
+  [[ "$(field "$json" apiErrorDetail)" == "" ]] && ok "api-error-recover: apiErrorDetail===\"\" after recovery" \
+    || not_ok "api-error-recover: apiErrorDetail===\"\" after recovery (got: $(field "$json" apiErrorDetail))"
+fi
+check_no_orphans "$mocklog" "api-error-recover"
+check_exit_status "api-error-recover"
+check_no_engine_errors "$log" "api-error-recover"
+check_no_note "api-error-recover" "$json"
 
 echo
 echo "== rate-limited (reset header -> rateLimitedUntil, resume after the shortened window) =="
@@ -352,6 +432,11 @@ else
   [[ "${fired:-0}" -ge 1 ]] && ok "hang: probe watchdog fired ($fired)" || not_ok "hang: probe watchdog fired (got $fired)"
   [[ "$elapsed" -le 10 ]] && ok "hang: mock brought down promptly, not left hanging (${elapsed}s)" \
     || not_ok "hang: mock brought down promptly, not left hanging (took ${elapsed}s)"
+  # gh never answered -- this is offline, not a GitHub-side API error.
+  [[ "$(field "$json" status)" == "offline" ]] && ok "hang: status=offline (plugin-side timeout, not api-error)" \
+    || not_ok "hang: status=offline (got: $(field "$json" status))"
+  [[ "$(field "$json" apiErrorDetail)" == "" ]] && ok "hang: apiErrorDetail===\"\"" \
+    || not_ok "hang: apiErrorDetail===\"\" (got: $(field "$json" apiErrorDetail))"
 fi
 check_no_orphans "$mocklog" "hang"
 check_exit_status "hang"
@@ -370,6 +455,13 @@ else
   overflow="$(field "$json" _dashboardOverflowCount)"
   [[ "${overflow:-0}" -ge 1 ]] && ok "flood: dashboardOverflowCount >= 1 ($overflow)" \
     || not_ok "flood: dashboardOverflowCount >= 1 (got $overflow)"
+  # GitHub did answer -- the plugin cut it off, so this is a genuine
+  # api-error, not offline, with a "response too large" detail.
+  [[ "$(field "$json" status)" == "api-error" ]] && ok "flood: status=api-error (GitHub answered; the plugin cut it off)" \
+    || not_ok "flood: status=api-error (got: $(field "$json" status))"
+  detail="$(field "$json" apiErrorDetail)"
+  [[ "$detail" == *"dashboard: response too large"* ]] && ok "flood: apiErrorDetail names the flooded source ($detail)" \
+    || not_ok "flood: apiErrorDetail names the flooded source (got: $detail)"
 fi
 check_no_orphans "$mocklog" "flood"
 check_exit_status "flood"
@@ -410,8 +502,11 @@ else
   ok "notif-garbage: probe printed a PROBE_RESULT line"
   [[ "$(field "$json" unreadCount)" == "0" ]] && ok "notif-garbage: unreadCount stayed 0 (no data ever applied)" \
     || not_ok "notif-garbage: unreadCount stayed 0 (got $(field "$json" unreadCount))"
-  [[ "$(field "$json" status)" == "offline" ]] && ok "notif-garbage: status=offline (dashboard ok, notifications failed)" \
-    || not_ok "notif-garbage: status=offline (got: $(field "$json" status))"
+  [[ "$(field "$json" status)" == "api-error" ]] && ok "notif-garbage: status=api-error (dashboard ok, notifications malformed)" \
+    || not_ok "notif-garbage: status=api-error (got: $(field "$json" status))"
+  [[ "$(field "$json" apiErrorDetail)" == "notifications: malformed response" ]] \
+    && ok "notif-garbage: apiErrorDetail===\"notifications: malformed response\"" \
+    || not_ok "notif-garbage: apiErrorDetail===\"notifications: malformed response\" (got: $(field "$json" apiErrorDetail))"
 fi
 # The rejected body's Etag must never be committed -- the refresh()-driven
 # second poll (same etag-roundtrip helper the "ok" scenario uses) must not

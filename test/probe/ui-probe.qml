@@ -237,6 +237,7 @@ ShellRoot {
       unreadCount: barWidget.unreadCount,
       hasAttention: barWidget.hasAttention,
       tooltipSummary: barWidget.tooltipSummary,
+      statusSeverity: barWidget.statusSeverity,
       settingsSource: svc.settingsSource,
       scopedHost: svc.scopedHost
     })
@@ -253,7 +254,9 @@ ShellRoot {
       statusHintSevere: p.statusHintSevere,
       heroMeta: p.heroMeta,
       ghVersion: svc.ghVersion,
-      ghVersionSupported: svc.ghVersionSupported
+      ghVersionSupported: svc.ghVersionSupported,
+      tooltipSummary: barWidget.tooltipSummary,
+      statusSeverity: barWidget.statusSeverity
     })
   }
 

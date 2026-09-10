@@ -497,10 +497,31 @@ function classifyFailure(stderrText, exitCode) {
     return "rate-limited"
   }
   var hasHttpStatus = /HTTP\s+\d{3}/i.test(text)
+  // A watchdog kill means gh never answered, so this is never an HTTP
+  // failure -- exit 124 is authoritative regardless of stderr wording.
+  if (exitCode === 124 || (!hasHttpStatus && /timed out/i.test(text))) {
+    return "offline"
+  }
   if (!hasHttpStatus && (/dial tcp/i.test(text) || /connection refused/i.test(text) || /no such host/i.test(text) || /timeout/i.test(text))) {
     return "offline"
   }
   return "error"
+}
+
+var API_ERROR_DETAIL_CAP = 48
+
+// Short label for a gh failure classifyFailure left as "error"/"default".
+// An output-overflow kill is checked first, then stderr is scanned for
+// the first "HTTP <nnn>", falling back to the exit code.
+function apiErrorDetail(stderrText, exitCode) {
+  var text = safeStr(stderrText, "").slice(0, 2048).replace(/[\x00-\x1f\x7f]/g, " ")
+  var code = safeNum(exitCode, 0)
+  if (code === 137 || /output limit exceeded/i.test(text)) {
+    return "response too large"
+  }
+  var httpMatch = text.match(/HTTP\s+(\d{3})/i)
+  var label = httpMatch ? ("HTTP " + httpMatch[1]) : ("request failed (exit " + code + ")")
+  return truncate(label, API_ERROR_DETAIL_CAP)
 }
 
 // ------------------------------------------------------------------ gh version pin
@@ -750,6 +771,7 @@ if (typeof module !== "undefined" && module.exports) {
     relativeTime: relativeTime,
     isSafeGithubUrl: isSafeGithubUrl,
     classifyFailure: classifyFailure,
+    apiErrorDetail: apiErrorDetail,
     parseHeadersAndBody: parseHeadersAndBody,
     badgeText: badgeText,
     summaryTooltip: summaryTooltip,

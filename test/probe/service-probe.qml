@@ -158,6 +158,23 @@ ShellRoot {
           })
         })
       })
+    } else if (scenario === "api-error") {
+      // A poller that was ok flips to api-error on its own next cycle --
+      // the mode file only takes effect on the fetch refresh() triggers.
+      writeModeFile("api-error", function () {
+        service.refresh()
+        _waitUntil(4000, function () { return service.status === "api-error" }, finishNow)
+      })
+    } else if (scenario === "api-error-recover") {
+      writeModeFile("api-error", function () {
+        service.refresh()
+        _waitUntil(4000, function () { return service.status === "api-error" }, function () {
+          writeModeFile("ok", function () {
+            service.refresh()
+            _waitUntil(4000, function () { return service.status === "ok" }, finishNow)
+          })
+        })
+      })
     } else if (scenario === "rate-limited-resume") {
       // Only notifications' -i output carries a real X-Ratelimit-Reset
       // header -- dashboard/probe failures always fall back to a fixed
@@ -227,6 +244,8 @@ ShellRoot {
       myIssuesTotal: service.myIssuesTotal,
       reposTotal: service.reposTotal,
       rateLimitedUntil: service.rateLimitedUntil,
+      apiErrorDetail: service.apiErrorDetail,
+      statusSeverity: service.statusSeverity,
       dashboardPartial: service.dashboardPartial,
       ghPath: service.ghPath,
       ghVersion: service.ghVersion,
@@ -235,6 +254,7 @@ ShellRoot {
       ghVersionSupported: service.ghVersionSupported,
       dashboardStatus: debugProp("_dashboardStatus"),
       notifStatus: debugProp("_notifStatus"),
+      _reProbeArmed: debugProp("_reProbeArmed"),
       note: note,
       _ghPathWatchdogFiredCount: debugProp("_ghPathWatchdogFiredCount"),
       _probeWatchdogFiredCount: debugProp("_probeWatchdogFiredCount"),

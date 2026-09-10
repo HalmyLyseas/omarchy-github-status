@@ -17,6 +17,8 @@ BarWidget {
 
   readonly property int unreadCount: svc ? Number(svc.unreadCount) || 0 : 0
   readonly property bool hasAttention: svc ? svc.hasAttention === true : false
+  // "ok" | "info" | "warn" | "severe" -- drives the status dot below.
+  readonly property string statusSeverity: svc ? (svc.statusSeverity || "ok") : "ok"
 
   // Counts open PRs whose CI rollup is "failure" -- feeds the bar tooltip
   // summary only; svc.hasAttention drives the icon's urgent recolor, so
@@ -42,6 +44,10 @@ BarWidget {
     if (status === "rate-limited") {
       var until = svc.rateLimitedUntil
       return "GitHub Status — rate-limited" + (until ? " until " + until : "")
+    }
+    if (status === "api-error") {
+      var detail = svc.apiErrorDetail
+      return "GitHub Status — GitHub API error" + (detail ? " (" + detail + ")" : "")
     }
     return "GitHub Status — " + Model.summaryTooltip({
       unreadCount: svc.unreadCount,
@@ -141,6 +147,22 @@ BarWidget {
             font.pixelSize: Style.font.caption
             font.bold: true
           }
+        }
+
+        // Degraded-status dot, opposite corner from the unread pill --
+        // severe (no-gh/unauthenticated) in urgent color, warn (offline/
+        // rate-limited/api-error) a dim foreground tint.
+        Rectangle {
+          visible: root.statusSeverity === "warn" || root.statusSeverity === "severe"
+          width: Style.space(6)
+          height: Style.space(6)
+          radius: height / 2
+          color: root.statusSeverity === "severe" ? root.urgent : button.foreground
+          opacity: root.statusSeverity === "severe" ? 1 : 0.6
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          anchors.rightMargin: -Style.space(2)
+          anchors.bottomMargin: -Style.space(2)
         }
       }
     }

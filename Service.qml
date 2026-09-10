@@ -17,8 +17,15 @@ Item {
   // Service public API. Every property is DERIVED from `internal` below.
   // ============================================================
 
-  // "ok" | "loading" | "no-gh" | "unauthenticated" | "offline" | "rate-limited"
+  // "ok" | "loading" | "no-gh" | "unauthenticated" | "offline" |
+  // "rate-limited" | "api-error"
   readonly property string status: computeStatus()
+  // "" | "dashboard: HTTP 502" | "notifications: malformed response" |
+  // both joined with " · " -- only sources currently reporting api-error.
+  readonly property string apiErrorDetail: pickApiErrorDetail()
+  // "ok" | "info" | "warn" | "severe" -- coarse grouping of status for the
+  // bar icon dot and the panel hint style.
+  readonly property string statusSeverity: computeStatusSeverity()
   // "last time we successfully synced with GitHub" -- the OLDEST of the
   // sources that have ever synced, so "Synced X ago" is a lower bound on
   // every section's freshness, not just whichever source is freshest.
@@ -40,6 +47,9 @@ Item {
   // a real X-Ratelimit-Reset; the others fall back to a +60min window).
   readonly property string _dashboardStatus: internal.dashboardStatus
   readonly property string _notifStatus: internal.notifStatus
+  // Debug-only: whether a retry of the login probe is scheduled -- true
+  // after any probe failure that didn't already resolve the login.
+  readonly property bool _reProbeArmed: reProbeTimer.running
   readonly property bool busy: dashboardProc.running || notificationsProc.running
   // Debug-only: lets a probe poll for "every process settled", including
   // the three that `busy` above deliberately excludes (ghpath/version/probe).
@@ -684,6 +694,10 @@ Item {
     property double probeRateLimitedUntilMs: 0
     property string probeRateLimitedUntil: ""
 
+    property string dashboardApiError: ""
+    property string notifApiError: ""
+    property string probeApiError: ""
+
     property var notifications: []
     property var reviewRequests: []
     property var openPRs: []
@@ -726,7 +740,7 @@ Item {
   // Severity ladder, most severe first. worstOf picks whichever input is
   // more severe; an unrecognized string is treated as "loading".
   function worstOf(a, b) {
-    var order = ["no-gh", "unauthenticated", "rate-limited", "offline", "loading", "ok"]
+    var order = ["no-gh", "unauthenticated", "rate-limited", "api-error", "offline", "loading", "ok"]
     var ai = order.indexOf(a); if (ai < 0) ai = order.indexOf("loading")
     var bi = order.indexOf(b); if (bi < 0) bi = order.indexOf("loading")
     return ai <= bi ? a : b
@@ -760,6 +774,42 @@ Item {
     return candidates[0].until
   }
 
+  // Lists only sources whose status is currently api-error, joined with
+  // " · " -- same pollersActive rule as pickRateLimitedUntil, so a stale
+  // probe detail never lingers once the real pollers are authoritative.
+  function pickApiErrorDetail() {
+    var parts = []
+    if (internal.dashboardStatus === "api-error" && internal.dashboardApiError) {
+      parts.push("dashboard: " + internal.dashboardApiError)
+    }
+    if (internal.notifStatus === "api-error" && internal.notifApiError) {
+      parts.push("notifications: " + internal.notifApiError)
+    }
+    if (!internal.pollersActive && internal.probeStatus === "api-error" && internal.probeApiError) {
+      parts.push("probe: " + internal.probeApiError)
+    }
+    return parts.join(" · ")
+  }
+
+  // "ok" | "info" (loading) | "warn" (offline/rate-limited/api-error) |
+  // "severe" (no-gh/unauthenticated) -- drives the bar icon dot and
+  // whether Panel.qml uses the dim or severe hint style.
+  function computeStatusSeverity() {
+    switch (root.status) {
+      case "no-gh":
+      case "unauthenticated":
+        return "severe"
+      case "offline":
+      case "rate-limited":
+      case "api-error":
+        return "warn"
+      case "loading":
+        return "info"
+      default:
+        return "ok"
+    }
+  }
+
   // Logs every real transition; stops both pollers + arms the re-probe
   // cycle whenever the worst current source is no-gh/unauthenticated.
   onStatusChanged: {
@@ -771,9 +821,11 @@ Item {
     }
   }
 
-  function setProbeStatus(s) { internal.probeStatus = s }
-  function setDashboardStatus(s) { internal.dashboardStatus = s }
-  function setNotifStatus(s) { internal.notifStatus = s }
+  // Clears that source's api-error detail whenever it moves to any other
+  // status -- the detail string only ever describes the current failure.
+  function setProbeStatus(s) { internal.probeStatus = s; if (s !== "api-error") internal.probeApiError = "" }
+  function setDashboardStatus(s) { internal.dashboardStatus = s; if (s !== "api-error") internal.dashboardApiError = "" }
+  function setNotifStatus(s) { internal.notifStatus = s; if (s !== "api-error") internal.notifApiError = "" }
 
   function mapClassifiedStatus(cls) {
     switch (cls) {
@@ -781,14 +833,15 @@ Item {
       case "unauthenticated": return "unauthenticated"
       case "rate-limited": return "rate-limited"
       case "offline": return "offline"
-      default: return "offline"
+      case "error": return "api-error"
+      default: return "api-error"
     }
   }
 
   // source is "probe" | "dashboard" | "notifications". Records the
-  // rate-limit reset (if applicable) against only that source, then
-  // updates that source's own status.
-  function handleFetchFailure(source, cls, rawText) {
+  // rate-limit reset (if applicable), stores detail (caller-computed,
+  // used only when mapped is "api-error"), then sets that source's status.
+  function handleFetchFailure(source, cls, rawText, detail) {
     var mapped = mapClassifiedStatus(cls)
     if (mapped === "rate-limited") {
       var untilMs = parseRateLimitReset(rawText)
@@ -805,6 +858,11 @@ Item {
         internal.probeRateLimitedUntil = label
       }
       log(source + " rate-limited, resuming at " + label)
+    }
+    if (mapped === "api-error") {
+      if (source === "dashboard") internal.dashboardApiError = detail
+      else if (source === "notifications") internal.notifApiError = detail
+      else if (source === "probe") internal.probeApiError = detail
     }
     if (source === "dashboard") setDashboardStatus(mapped)
     else if (source === "notifications") setNotifStatus(mapped)
@@ -937,7 +995,7 @@ Item {
       reProbeTimer.restart()
       return
     }
-    handleFetchFailure("probe", cls, rawErr)
+    handleFetchFailure("probe", cls, rawErr, Model.apiErrorDetail(rawErr, exitCode))
     internal.pollersActive = true
     maybeRearmReProbeForLogin()
     ensureReProbeWhileBlocked()
@@ -1074,7 +1132,8 @@ Item {
       if (parsedCount === 0) {
         log("dashboard fetch: no usable data in JSON envelope -- keeping last-good data")
         handleFetchFailure("dashboard", "error",
-          rawErr || (parsed && parsed.errors ? briefJson(parsed.errors) : "unparseable/empty JSON"))
+          rawErr || (parsed && parsed.errors ? briefJson(parsed.errors) : "unparseable/empty JSON"),
+          "unparseable response")
         return
       }
       if (mapped.openPRs !== null) { internal.openPRs = mapped.openPRs; internal.openPRsTotal = mapped.openPRsTotal }
@@ -1091,7 +1150,7 @@ Item {
       return
     }
     var cls = Model.classifyFailure(rawErr, exitCode)
-    handleFetchFailure("dashboard", cls, rawErr)
+    handleFetchFailure("dashboard", cls, rawErr, Model.apiErrorDetail(rawErr, exitCode))
   }
 
   // Notifications fetch: conditional GET, ETag round-tripped, direct `gh`
@@ -1180,7 +1239,8 @@ Item {
         onFetchSuccess("notifications")
       } else {
         log("notifications: exit 0 but not a valid 200+array body (status=" + parsed.status + ") -- keeping last-good data")
-        handleFetchFailure("notifications", "error", "malformed 200 response or unexpected status " + parsed.status)
+        handleFetchFailure("notifications", "error", "malformed 200 response or unexpected status " + parsed.status,
+          "malformed response")
       }
       return
     }
@@ -1192,7 +1252,7 @@ Item {
       onFetchSuccess("notifications")
       return
     }
-    handleFetchFailure("notifications", cls, rawOut + "\n" + rawErr)
+    handleFetchFailure("notifications", cls, rawOut + "\n" + rawErr, Model.apiErrorDetail(rawErr, exitCode))
   }
 
   // ============================================================
