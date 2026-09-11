@@ -1,7 +1,7 @@
 # Threat model
 
 Scope: `halmylyseas.github-status`, an Omarchy shell plugin driven entirely
-by the user's local `gh` CLI. See `CLAUDE.md` for the hard rules this model
+by the user's local `gh` CLI. See `CONTRIBUTING.md` for the hard rules this model
 assumes are enforced, and `docs/developers.md` for architecture detail.
 
 ## Assets
@@ -39,7 +39,7 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
 - It never sees a GitHub credential, a webhook payload, or anything outside
   what the user's own already-authenticated `gh` CLI is willing to return.
 - It cannot mutate anything on GitHub: every call is `gh api` GET or
-  `gh api graphql` with a fixed, non-mutating query (`CLAUDE.md` rule 2).
+  `gh api graphql` with a fixed, non-mutating query (`CONTRIBUTING.md` rule 2).
 - It cannot modify anything under `/usr/share/omarchy/` (rule 5). Its one
   write into Omarchy shell internals is its own `shell.json` entry, via
   `bar.shell.updateEntryInline()`; everything else it only reads/reacts to.
@@ -79,7 +79,7 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
 ## CI as part of this boundary
 
 `.github/**` is exempt from the repo's own comment-hygiene scan
-(`test/comment-hygiene.test.js`) and, by extension, from `CLAUDE.md` rule
+(`test/comment-hygiene.test.js`) and, by extension, from `CONTRIBUTING.md` rule
 4's package-manager-literal restriction: workflow files are CI-only
 infrastructure, never installed on or executed by an end user's machine,
 and legitimately need `pacman`-shaped commands to build a disposable test

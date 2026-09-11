@@ -1,7 +1,7 @@
 # Developer notes
 
-The design record for this plugin, for a new contributor. The README covers using it; `CLAUDE.md`
-carries the hard rules; `docs/threat-model.md` carries the security model.
+The design record for this plugin, for a new contributor. The README covers using it;
+`CONTRIBUTING.md` carries the hard rules; `docs/threat-model.md` carries the security model.
 
 ## Architecture
 
@@ -143,7 +143,7 @@ on an unpinned major.
 ## Security invariants
 
 - **Read-only GitHub, always.** Only `gh api` GET and `gh api graphql` queries; never a mutation
-  (`CLAUDE.md` rule 2).
+  (`CONTRIBUTING.md` rule 2).
 - **URL allowlist + array-form exec.** `Model.isSafeGithubUrl()` requires the
   `^https://github\.com/` prefix, rejects a control character or whitespace right after it, and
   caps length; `Service.qml.openUrl` checks that before `Quickshell.execDetached(["xdg-open",

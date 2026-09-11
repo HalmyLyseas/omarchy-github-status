@@ -1,11 +1,16 @@
-# omarchy-github-status (`halmylyseas.github-status`)
+# Contributing to GitHub Status
+
+This document is the operational contract for maintainers and contributors.
+Read it before changing code, tests, release metadata, or the installed copy.
+
+## Project purpose
 
 An Omarchy shell plugin: a status-bar dashboard for a solo maintainer's own
 GitHub repos — notifications inbox, own open PRs with CI/review state,
 review requests, own open issues, and per-repo activity — powered entirely
 by the user's own authenticated `gh` CLI.
 
-## The outcome this project must achieve
+## Required outcome
 
 From the bar, the user can see at a glance and in one click:
 
@@ -19,8 +24,8 @@ From the bar, the user can see at a glance and in one click:
 
 Done means: all six work live on this machine, `omarchy plugin validate`
 passes, `bash test/all` passes, and the repo is submission-ready for the
-Omarchy plugin marketplace — **submission itself is gated on explicit
-human approval and is never performed by an agent.**
+Omarchy plugin marketplace. **Submission must be performed manually by a
+maintainer after explicit approval; agents and automation must never file it.**
 
 ## Hard rules
 
@@ -60,5 +65,6 @@ human approval and is never performed by an agent.**
 - Installs and updates track the installed folder's branch **HEAD**, not a
   specific reviewed commit — so `master` is release-only; work happens on a
   feature/hardening branch and only lands on `master` when ready to ship.
-- Marketplace submission is a human-approved step only, never filed by an
-  agent. See `docs/developers.md` "Releasing".
+- Marketplace submission must be performed manually by a maintainer after
+  explicit approval; agents and automation must never file it. See
+  `docs/developers.md` "Releasing".

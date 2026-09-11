@@ -1,6 +1,4 @@
-# Local scoping/handoff notes, not part of the plugin: this repository
-# doubles as the installed plugin folder, so anything tracked here is
-# copied onto every user's machine.
+# Local notes and automation scratch must never ship with the plugin.
 /exchange/
 
 *.bak
