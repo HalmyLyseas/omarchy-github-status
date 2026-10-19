@@ -63,7 +63,7 @@ jobs:
           exit $status
 
       - name: omarchy plugin validate (manifest schema, entry points, no symlinks)
-        run: "$OMARCHY_PLUGIN_VALIDATOR" .
+        run: '"$OMARCHY_PLUGIN_VALIDATOR" .'
 
       - name: Node unit tests (Model.js, QML Text-sink audit, comment hygiene)
         run: node --test test/*.test.js
