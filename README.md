@@ -82,7 +82,7 @@ then run its sign-in flow once from a terminal. If `gh` is missing or not
 signed in, the bar tells you so instead of failing silently.
 
 Omarchy 4.0.1 or later (including the scoped plugin API introduced in
-4.0.3).
+4.0.3). This release is validated against Omarchy 4.0.5 and Qt 6.12.
 
 ## Install
 
@@ -180,9 +180,9 @@ bash test/all
 omarchy plugin validate .
 ```
 
-`test/all` runs the Node unit tests (`Model.js`, a QML `Text` PlainText-sink
-audit, the comment-hygiene scan), two read-only contract tests (a version
-pin against your real installed `gh` CLI, and a check that the installed
+`test/all` runs the Node unit tests (`Model.js`, QML `Text` PlainText-sink and
+palette audits, the comment-hygiene scan, the CI target guard), two read-only
+contract tests (a version pin against your real installed `gh` CLI, and a check that the installed
 Omarchy plugin facade still exposes what this plugin depends on — both
 skip cleanly when the thing they check isn't present), then three
 `qs -n -p` probe suites: one drives the real `Service.qml` through its full

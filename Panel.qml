@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -29,9 +30,9 @@ Panel {
   // Column, otherwise unreachable across files -- see test/probe/ui-probe.qml.
   readonly property var _debugContentItem: column
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
-  readonly property color muted: Color.muted
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
+  readonly property color muted: Commons.Color.muted
   readonly property color dim: Qt.darker(foreground, 1.4)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
@@ -599,7 +600,7 @@ Panel {
                   selected: root.issuesFilter === "focus"
                   bordered: true
                   foreground: root.foreground
-                  accent: Color.accent
+                  accent: Commons.Color.accent
                   fontFamily: root.fontFamily
                   fontSize: Style.font.caption
                   focusable: false
@@ -761,8 +762,8 @@ Panel {
     }
 
     background: BorderSurface {
-      color: Color.tooltip.background
-      borderSpec: Border.flat(Color.tooltip.border, Style.normalBorderWidth)
+      color: Commons.Color.tooltip.background
+      borderSpec: Border.flat(Commons.Color.tooltip.border, Style.normalBorderWidth)
       radius: Style.cornerRadius
     }
 
@@ -771,7 +772,7 @@ Panel {
       textFormat: Text.PlainText
       elide: Text.ElideRight
       width: Math.min(implicitWidth, tip.maxWidth)
-      color: Color.tooltip.text
+      color: Commons.Color.tooltip.text
       font.family: tip.fontFamily
       font.pixelSize: Style.font.bodySmall
       padding: Style.spacing.controlPaddingX
@@ -788,7 +789,7 @@ Panel {
     Rectangle {
       anchors.fill: parent
       radius: Style.cornerRadius
-      color: notifArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent, root.urgent) : "transparent"
+      color: notifArea.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent) : "transparent"
     }
 
     Column {
@@ -887,7 +888,7 @@ Panel {
     Rectangle {
       anchors.fill: parent
       radius: Style.cornerRadius
-      color: rrArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent, root.urgent) : "transparent"
+      color: rrArea.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent) : "transparent"
     }
 
     Column {
@@ -991,7 +992,7 @@ Panel {
     Rectangle {
       anchors.fill: parent
       radius: Style.cornerRadius
-      color: prArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent, root.urgent) : "transparent"
+      color: prArea.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent) : "transparent"
     }
 
     Text {
@@ -1112,7 +1113,7 @@ Panel {
     Rectangle {
       anchors.fill: parent
       radius: Style.cornerRadius
-      color: issueArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent, root.urgent) : "transparent"
+      color: issueArea.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent) : "transparent"
     }
 
     Column {
@@ -1216,7 +1217,7 @@ Panel {
     Rectangle {
       anchors.fill: parent
       radius: Style.cornerRadius
-      color: repoArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent, root.urgent) : "transparent"
+      color: repoArea.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent, root.urgent) : "transparent"
     }
 
     Column {
@@ -1269,7 +1270,7 @@ Panel {
           implicitHeight: releaseText.implicitHeight + Style.space(4)
           anchors.verticalCenter: parent.verticalCenter
           color: "transparent"
-          borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+          borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
           radius: Style.cornerRadius
 
           Text {

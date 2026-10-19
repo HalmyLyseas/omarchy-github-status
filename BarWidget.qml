@@ -3,6 +3,7 @@
 // degraded -- the panel itself carries the setup hint.
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -13,7 +14,7 @@ BarWidget {
   readonly property var shell: bar && bar.shell ? bar.shell : null
   readonly property var svc: shell ? shell.serviceFor("halmylyseas.github-status") : null
 
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
 
   readonly property int unreadCount: svc ? Number(svc.unreadCount) || 0 : 0
   readonly property bool hasAttention: svc ? svc.hasAttention === true : false
@@ -142,7 +143,7 @@ BarWidget {
             // the same cap the service itself applies to unreadCount.
             text: Model.badgeText(root.unreadCount)
             textFormat: Text.PlainText
-            color: Color.background
+            color: Commons.Color.background
             font.family: button.fontFamily
             font.pixelSize: Style.font.caption
             font.bold: true

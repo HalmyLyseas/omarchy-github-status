@@ -36,8 +36,11 @@ instead.
 
 ## Host compatibility
 
-Supports Omarchy 4.0.1 or later. 4.0.1/4.0.2 inject the host shell directly
-(`hasLegacyShellConfig`); 4.0.3 introduced a capability-scoped `PluginShellApi` facade instead
+Supports Omarchy 4.0.1 or later and is validated against Omarchy 4.0.5/Qt 6.12.
+Qt 6.12 adds a `QtQuick.Color` type that shadows the palette singleton, so every
+QML file importing `qs.Commons` also imports it as `Commons` and uses
+`Commons.Color`; `test/qml-sinks.test.js` rejects bare `Color.` references.
+4.0.1/4.0.2 inject the host shell directly (`hasLegacyShellConfig`); 4.0.3 introduced a capability-scoped `PluginShellApi` facade instead
 (`scopedHost`, `shellConfig` undefined). The facade supports `shell.serviceFor(id)` and
 `shell.updateEntryInline(id, settings)` scoped to this plugin's own id, but its `barConfig` copy
 only refreshes on a plugin-list/widget-registry change, never an inline write — so `Service.qml`
@@ -191,9 +194,12 @@ only when ready to ship.
   (control characters, oversized fields, malformed/partial GraphQL envelopes, list caps) plus
   real `gh` shapes.
 - `test/qml-sinks.test.js` (Node) — scans every `.qml` file at the plugin root for a `Text{}`
-  sink missing `textFormat: Text.PlainText`.
+  sink missing `textFormat: Text.PlainText` and rejects unqualified `Color.` palette references
+  that Qt 6.12 would shadow.
 - `test/comment-hygiene.test.js` (Node) — scans every shipped file (`git ls-files`, `.github/**`
   exempt) for a comment run longer than 3 lines or a forbidden project-log token.
+- `test/ci-target.test.js` (Node) — pins the exact Omarchy 4.0.5 CI target, the Qt 6 local
+  linter, the validator override, and the shared `GHS_SHELL_TREE` probe path.
 - `test/cli-contract.mjs` (Node, read-only) — runs the real local `gh`: `--version`'s major must
   be in `Model.SUPPORTED_GH_MAJORS`; auth-gated checks run only when signed in, skipping cleanly
   (`SKIP:`) otherwise.
@@ -223,14 +229,13 @@ only when ready to ship.
 
 ## CI
 
-`.github/workflows/test.yml` runs qmllint (0 errors, at least 5 `.qml` files) and
-`omarchy-plugin-validate` first, then the Node unit tests (including
-`test/cli-contract.mjs`/`test/host-contract.mjs`) on `archlinux:latest`, then all three probe
-suites under `cage` with a headless wlroots backend. The `omarchy` package itself is never
-installed — only its `usr/share/omarchy/shell`/`usr/share/omarchy/bin` subtrees are extracted
-(`-Swdd`, skipping dependency resolution) via an architecture-specific glob
-(`omarchy-[0-9]*-*.pkg.tar.zst`) matching exactly one archive; `test/ci-local [--no-cage]`
-mirrors the same steps.
+`.github/workflows/test.yml` clones the exact Omarchy `v4.0.5` tag and sets
+`GHS_SHELL_TREE`/`OMARCHY_PLUGIN_VALIDATOR` to that checkout. It runs qmllint (0 errors, at least
+5 `.qml` files) and the source-tree `omarchy-plugin-validate` first, then the Node unit tests
+(including the palette guard and `test/cli-contract.mjs`/`test/host-contract.mjs`) on
+`archlinux:latest`, then all three probe suites under `cage` with a headless wlroots backend.
+`test/ci-local [--no-cage]` mirrors the same steps against the installed shell by default; set
+`GHS_SHELL_TREE` and `OMARCHY_PLUGIN_VALIDATOR` to point it at another exact checkout.
 
 ## Releasing
 

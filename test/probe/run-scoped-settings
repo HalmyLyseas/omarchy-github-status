@@ -23,9 +23,10 @@ fi
 
 # qs.Commons/qs.Ui resolve through this symlink -- same convention as
 # test/probe/run-ui, since BarWidget.qml/Panel.qml import them.
+SHELL_TREE="${GHS_SHELL_TREE:-/usr/share/omarchy/shell}"
 QMLROOT="$OUT_DIR/qmlroot"
 mkdir -p "$QMLROOT"
-ln -sfn /usr/share/omarchy/shell "$QMLROOT/qs"
+ln -sfn "$SHELL_TREE" "$QMLROOT/qs"
 
 # Isolated HOME so Service.qml's default configPath (`$HOME/.config/
 # omarchy/shell.json`) never resolves to this machine's real file, and a
@@ -39,7 +40,7 @@ LOG="$OUT_DIR/result.log"
 MOCKLOG="$OUT_DIR/result.mock.log"
 : > "$MOCKLOG"
 env GHS_PLUGIN_DIR="$PLUGIN_DIR" GHS_GHPATH="$MOCK_GH" GH_MOCK_MODE=ok GH_MOCK_LOG="$MOCKLOG" \
-  QML_IMPORT_PATH="$QMLROOT" HOME="$HOME_DIR" PATH="$BIN_DIR:/usr/bin:/bin" \
+  GHS_SHELL_TREE="$SHELL_TREE" QML_IMPORT_PATH="$QMLROOT" HOME="$HOME_DIR" PATH="$BIN_DIR:/usr/bin:/bin" \
   timeout 30 qs -n -p "$PLUGIN_DIR/test/probe/scoped-settings-probe.qml" >"$LOG" 2>&1
 code=$?
 cat "$LOG"

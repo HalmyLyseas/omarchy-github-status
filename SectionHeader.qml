@@ -3,6 +3,7 @@
 // every Panel.qml section (see docs/developers.md, "Architecture").
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Item {
@@ -16,7 +17,7 @@ Item {
   property int total: 0
   property bool synced: true
   property bool collapsed: false
-  property color foreground: Color.foreground
+  property color foreground: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property Component extra: null
 
@@ -48,7 +49,7 @@ Item {
     anchors.left: parent.left
     width: Math.max(0, trailing.x - Style.space(6))
     radius: Style.cornerRadius
-    color: foldArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent, Color.urgent) : "transparent"
+    color: foldArea.containsMouse ? Style.hoverFillFor(root.foreground, Commons.Color.accent, Commons.Color.urgent) : "transparent"
   }
 
   MouseArea {
@@ -101,7 +102,7 @@ Item {
       anchors.verticalCenter: parent.verticalCenter
       implicitWidth: Math.max(pill.implicitHeight, pillText.implicitWidth + Style.space(10))
       implicitHeight: pillText.implicitHeight + Style.space(4)
-      color: Style.selectedFillFor(root.foreground, Color.accent, Color.urgent)
+      color: Style.selectedFillFor(root.foreground, Commons.Color.accent, Commons.Color.urgent)
       borderSpec: Border.none()
       radius: pill.implicitHeight / 2
 

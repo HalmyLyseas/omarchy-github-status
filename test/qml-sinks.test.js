@@ -32,3 +32,22 @@ test("every local QML Text sink is explicitly plain text", () => {
         }
     }
 });
+
+test("QML palette references use the Qt 6.12-safe Commons namespace", () => {
+    const root = join(__dirname, "..");
+    const offenders = [];
+    const missingImports = [];
+    for (const file of readdirSync(root).filter(name => name.endsWith(".qml"))) {
+        const source = readFileSync(join(root, file), "utf8");
+        source.split(/\r?\n/).forEach((line, index) => {
+            if (/(^|[^A-Za-z_.])Color\./.test(line))
+                offenders.push(`${file}:${index + 1}: ${line.trim()}`);
+        });
+        if (source.includes("Commons.Color.") && !source.includes("import qs.Commons as Commons"))
+            missingImports.push(file);
+    }
+    assert.deepEqual(offenders, [],
+        "Qt 6.12 shadows the unqualified Color singleton; import qs.Commons as Commons and use Commons.Color");
+    assert.deepEqual(missingImports, [],
+        "files using Commons.Color must import qs.Commons as Commons");
+});

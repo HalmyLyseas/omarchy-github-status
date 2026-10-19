@@ -9,6 +9,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container: archlinux:latest
+    env:
+      GHS_SHELL_TREE: /tmp/omarchy/shell
+      OMARCHY_PLUGIN_VALIDATOR: /tmp/omarchy/bin/omarchy-plugin-validate
     steps:
       # archlinux:latest ships pacman but not git, so install it before
       # checkout can run. Full sync+upgrade, never a bare `-Sy` -- a
@@ -21,13 +24,6 @@ jobs:
       - name: Trust the checkout (container runs as root, workspace is owned by the runner uid)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Enable the omarchy pacman repo
-        run: |
-          # Same repo/SigLevel an installed Omarchy system carries in
-          # /etc/pacman.conf -- Optional TrustAll is the upstream project's
-          # own choice, not something loosened for CI.
-          printf '[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/stable/$arch\n' >> /etc/pacman.conf
-
       - name: Install test dependencies
         run: |
           # Measured set: quickshell (qs, and pulls in qt6-declarative's
@@ -35,47 +31,28 @@ jobs:
           # run the probe suites; nodejs runs the JS suites; procps-ng
           # provides `ps`; github-cli (from `extra`) runs the version-pin
           # half of the CLI contract test -- CI has no credentials, so its
-          # auth half skips itself; jq is what usr/share/omarchy/bin/
-          # omarchy-plugin-validate itself needs.
+          # auth half skips itself; jq is what the plugin-validate script
+          # needs.
           pacman -Syu --noconfirm quickshell cage nodejs procps-ng jq github-cli
 
-      - name: Extract the Omarchy shell QML tree and plugin-validate script
+      - name: Clone exact Omarchy source
         run: |
-          # The `omarchy` package itself is a ~120MB meta-package that pulls
-          # in the whole desktop via its own Depends, none of which this
-          # headless test run needs -- only the static QML files under
-          # /usr/share/omarchy/shell (BarWidget.qml/Panel.qml import as
-          # qs.Ui/qs.Commons) and usr/share/omarchy/bin (omarchy-plugin-
-          # validate, below). `-Swdd` downloads the package to the local
-          # cache without installing it, WITHOUT resolving its dependency
-          # chain: plain `-Sw` also caches the hard-Depends omarchy-settings
-          # package, and the glob below would then match both archives.
-          # bsdtar is always present in this container (it ships in
-          # libarchive, a hard dependency of pacman itself), and the package
-          # has no .INSTALL scriptlet, so nothing is lost by never running
-          # `pacman -S omarchy`. The package is architecture-specific (not
-          # `any`), so the glob's trailing segment matches whichever arch
-          # this runner's pacman resolved.
-          pacman -Swdd --noconfirm omarchy
-          shopt -s nullglob
-          pkgs=(/var/cache/pacman/pkg/omarchy-[0-9]*-*.pkg.tar.zst)
-          if [[ ${#pkgs[@]} -ne 1 ]]; then
-            echo "expected exactly one omarchy package archive, found ${#pkgs[@]}: ${pkgs[*]}" >&2
-            exit 1
-          fi
-          # usr/share/omarchy/bin/omarchy-plugin-validate is a symlink into usr/bin.
-          bsdtar -x -C / -f "${pkgs[0]}" usr/share/omarchy/shell usr/share/omarchy/bin usr/bin/omarchy-plugin-validate
-          ls -la /usr/bin/omarchy-plugin-validate /usr/share/omarchy/shell/Ui/Panel.qml
+          # Pin the compatibility target instead of testing whatever the
+          # stable package happens to be today.
+          git clone --depth 1 --branch v4.0.5 https://github.com/basecamp/omarchy.git /tmp/omarchy
+          test "$(git -C /tmp/omarchy describe --tags --exact-match)" = v4.0.5
+          test -d "$GHS_SHELL_TREE"
+          test -x "$OMARCHY_PLUGIN_VALIDATOR"
 
       - name: qmllint every .qml file (0 errors required, warnings allowed)
         run: |
           mkdir -p /tmp/qmlroot
-          ln -sfn /usr/share/omarchy/shell /tmp/qmlroot/qs
+          ln -sfn "$GHS_SHELL_TREE" /tmp/qmlroot/qs
           status=0
           count=0
           while IFS= read -r -d '' f; do
             count=$((count + 1))
-            out="$(/usr/lib/qt6/bin/qmllint -I /tmp/qmlroot -I /usr/share/omarchy/shell "$f" 2>&1)"
+            out="$(/usr/lib/qt6/bin/qmllint -I /tmp/qmlroot -I "$GHS_SHELL_TREE" "$f" 2>&1)"
             if grep -q ':[0-9]*:[0-9]*: Error' <<<"$out"; then
               echo "$out"
               status=1
@@ -86,7 +63,7 @@ jobs:
           exit $status
 
       - name: omarchy plugin validate (manifest schema, entry points, no symlinks)
-        run: /usr/bin/omarchy-plugin-validate .
+        run: "$OMARCHY_PLUGIN_VALIDATOR" .
 
       - name: Node unit tests (Model.js, QML Text-sink audit, comment hygiene)
         run: node --test test/*.test.js

@@ -21,9 +21,10 @@ if ! command -v qs >/dev/null 2>&1; then
   exit 0
 fi
 
+SHELL_TREE="${GHS_SHELL_TREE:-/usr/share/omarchy/shell}"
 QMLROOT="$OUT_DIR/qmlroot"
 mkdir -p "$QMLROOT"
-ln -sfn /usr/share/omarchy/shell "$QMLROOT/qs"
+ln -sfn "$SHELL_TREE" "$QMLROOT/qs"
 
 # run_scenario <label> <VAR=val>... -- runs the probe once with every
 # trailing VAR=val exported plus GHS_UI_SCENARIO/GHS_XDGOPEN_LOG.
@@ -36,6 +37,7 @@ run_scenario() {
   : > "$xdgopenlog"
   env GH_MOCK_LOG="$mocklog" \
     GHS_PLUGIN_DIR="$PLUGIN_DIR" \
+    GHS_SHELL_TREE="$SHELL_TREE" \
     GHS_UI_SCENARIO="$ui_scenario" \
     GHS_XDGOPEN_LOG="$xdgopenlog" \
     QML_IMPORT_PATH="$QMLROOT" \

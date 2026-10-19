@@ -9,6 +9,7 @@ ShellRoot {
   id: root
 
   property string pluginDir: Quickshell.env("GHS_PLUGIN_DIR")
+  property string shellTree: Quickshell.env("GHS_SHELL_TREE") || "/usr/share/omarchy/shell"
   property string ghPathOverride: Quickshell.env("GHS_GHPATH")
   property string configFilePath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
   readonly property string pluginId: "halmylyseas.github-status"
@@ -79,7 +80,7 @@ ShellRoot {
   // every non-id key handed to it (shell.qml's updateEntryInline, ~line
   // 1078). Persists into the temp shell.json the same way the host would.
   function initApi() {
-    var component = Qt.createComponent("/usr/share/omarchy/shell/services/PluginShellApi.qml")
+    var component = Qt.createComponent(root.shellTree + "/services/PluginShellApi.qml")
     var item = component.createObject(root, { pluginId: root.pluginId })
     root.shellApi = item
     item.barConfig = { layout: { left: [], center: [], right: [root.currentEntry] } }
