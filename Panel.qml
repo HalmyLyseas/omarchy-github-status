@@ -126,8 +126,8 @@ Panel {
   readonly property var filteredRepos: root.filterList(root.repos)
 
   // Search temporarily owns what is visible: each section with a match opens,
-  // and each zero-match section closes. The manual flags stay untouched, so
-  // clearing the query restores precisely the layout from before the search.
+  // and each zero-match section closes. A header toggle during search updates
+  // the saved manual layout; clearing the query restores that saved layout.
   readonly property bool inboxEffectivelyCollapsed: root.searchActive ? root.filteredNotifications.length === 0 : root.inboxCollapsed
   readonly property bool reviewRequestsEffectivelyCollapsed: root.searchActive ? root.filteredReviewRequests.length === 0 : root.reviewRequestsCollapsed
   readonly property bool openPRsEffectivelyCollapsed: root.searchActive ? root.filteredOpenPRs.length === 0 : root.openPRsCollapsed

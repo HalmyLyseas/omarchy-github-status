@@ -191,6 +191,18 @@ ShellRoot {
         service.refresh()
         _waitUntil(4000, function () { return service._login === "SomeoneElse" }, finishNow)
       })
+    } else if (scenario === "login-remap") {
+      // Applies a login change after the initial poll has populated every
+      // section; this exercises the same path the probe-driven login uses.
+      service._applyLogin("SomeoneElse")
+      finishNow()
+    } else if (scenario === "notif-304-exit0") {
+      // The notifications mock returns the real 304 headers/ETag but exits
+      // 0, the alternate shape a future gh release could use.
+      writeModeFile("http-304-exit0", function () {
+        service.refresh()
+        _drainThen(finishNow)
+      })
     } else if (scenario === "rate-limited-resume") {
       // Only notifications' -i output carries a real X-Ratelimit-Reset
       // header -- dashboard/probe failures always fall back to a fixed
@@ -275,7 +287,13 @@ ShellRoot {
       login: debugProp("_login"),
       _dashboardTimerIntervalMs: debugProp("_dashboardTimerIntervalMs"),
       _notificationsTimerIntervalMs: debugProp("_notificationsTimerIntervalMs"),
+      notificationsLength: (service.notifications || []).length,
       notificationsExternalCount: debugProp("_notificationsExternalCount"),
+      notificationsEtag: debugProp("_notificationsEtag"),
+      openPRsExternalCount: (service.openPRs || []).filter(function (p) { return p && p.isExternal === true }).length,
+      reviewRequestsExternalCount: (service.reviewRequests || []).filter(function (p) { return p && p.isExternal === true }).length,
+      myIssuesExternalCount: (service.myIssues || []).filter(function (p) { return p && p.isExternal === true }).length,
+      reposFirstUrl: (service.repos || []).length > 0 ? service.repos[0].url : "",
       note: note,
       _ghPathWatchdogFiredCount: debugProp("_ghPathWatchdogFiredCount"),
       _probeWatchdogFiredCount: debugProp("_probeWatchdogFiredCount"),

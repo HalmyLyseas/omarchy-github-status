@@ -58,13 +58,16 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
   path resolution.** `resolveGhPath()`'s one shell invocation
   (`bash -lc "type -P gh"`) is a login shell resolving PATH through mise;
   every fetch *after* that point spawns the resolved absolute `gh` path
-  directly, with no shell in between. Accepted because the one shell call
-  is fixed (no remote/user data in its command line) and read-only
-  (`type -P`, nothing executed).
-- **`internal.login` never refreshes once known.** A mid-session `gh`
-  account switch would leave the isExternal/owner pills using the stale
-  identity until a restart — cosmetic only (no wrong data fetched; `gh`
-  itself remains the authenticated identity for every real API call).
+  directly, with no shell in between. Accepted because the command line is
+  fixed (no remote/user data) and only the resulting path is read. A login
+  shell sources the user's profile before `type -P`; that profile is part
+  of the trusted local environment, exactly as it is for any login shell.
+- **Login changes require a response carrying `viewer.login`.** The auth
+  probe and dashboard apply a normalized login and remap completed rows,
+  but if every response after a local `gh auth switch` omits
+  `viewer.login`, the plugin cannot observe the switch and keeps the
+  last-known identity. `gh` itself remains the authenticated identity for
+  every API call.
 
 ## Out of scope
 

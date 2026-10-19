@@ -72,6 +72,15 @@ function isExternalOwner(owner, login) {
   return o.toLowerCase() !== l.toLowerCase()
 }
 
+// GitHub logins are 1-39 alphanumeric/hyphen segments. Keep every login
+// read from gh/GraphQL inside that real shape before it reaches URLs,
+// comparisons, logs, or QML state.
+var GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
+function normalizeLogin(value) {
+  var s = safeStr(value, "").replace(/^\s+|\s+$/g, "")
+  return s && s.length <= 39 && GITHUB_LOGIN_RE.test(s) ? s : ""
+}
+
 // ----------------------------------------------------- URL translation
 
 // api.github.com REST subject -> a github.com web URL, string-rewrite only,
@@ -116,6 +125,7 @@ function apiUrlToWebUrl(subject) {
 // marks external rows; omitted, every row reads as non-external instead.
 function mapNotifications(json, login) {
   if (!isArray(json)) return []
+  var normalizedLogin = normalizeLogin(login)
   var out = []
   for (var i = 0; i < json.length && out.length < CAP_NOTIFICATIONS; i++) {
     var n = json[i]
@@ -134,7 +144,7 @@ function mapNotifications(json, login) {
       repo: repo,
       webUrl: truncate(webUrl, FIELD_CAP_URL),
       updatedAt: truncate(n.updated_at, FIELD_CAP_TAG),
-      isExternal: isExternalOwner(owner, login),
+      isExternal: isExternalOwner(owner, normalizedLogin),
       owner: owner
     })
   }
@@ -146,6 +156,7 @@ function mapNotifications(json, login) {
 // were already fetched with it unknown. Manual field copy keeps this ES5.
 function remapNotificationsExternal(list, login) {
   if (!isArray(list)) return []
+  var normalizedLogin = normalizeLogin(login)
   var out = []
   for (var i = 0; i < list.length; i++) {
     var item = list[i]
@@ -158,9 +169,45 @@ function remapNotificationsExternal(list, login) {
       repo: item.repo,
       webUrl: item.webUrl,
       updatedAt: item.updatedAt,
-      isExternal: isExternalOwner(item.owner, login),
+      isExternal: isExternalOwner(item.owner, normalizedLogin),
       owner: item.owner
     })
+  }
+  return out
+}
+
+// Re-derive login-dependent ownership for dashboard rows without a refetch.
+// Manual field copy keeps this ES5 and preserves every non-derived field.
+function remapExternalOwnership(list, login) {
+  if (!isArray(list)) return []
+  var normalizedLogin = normalizeLogin(login)
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    if (!isObject(item)) { out.push(item); continue }
+    var copy = {}
+    for (var key in item)
+      if (Object.prototype.hasOwnProperty.call(item, key)) copy[key] = item[key]
+    copy.isExternal = isExternalOwner(item.owner, normalizedLogin)
+    out.push(copy)
+  }
+  return out
+}
+
+// Repo web URLs are built from viewer.login, so they must follow the same
+// login transition as the external-owner pills.
+function remapRepoUrls(list, login) {
+  if (!isArray(list)) return []
+  var normalizedLogin = normalizeLogin(login)
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var item = list[i]
+    if (!isObject(item)) { out.push(item); continue }
+    var copy = {}
+    for (var key in item)
+      if (Object.prototype.hasOwnProperty.call(item, key)) copy[key] = item[key]
+    copy.url = repoWebUrl(normalizedLogin, item.name)
+    out.push(copy)
   }
   return out
 }
@@ -378,7 +425,7 @@ function filterIssues(issues, mode) {
 // Each of the four sections below is a mapped array (nodes present, however
 // many) or null -- the field didn't resolve, caller must not replace
 // last-good data. `login` and each *Total field ride alongside, per-section.
-function mapDashboard(json) {
+function mapDashboard(json, knownLogin) {
   var result = {
     openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "",
     openPRsTotal: null, reviewRequestsTotal: null, reposTotal: null, myIssuesTotal: null
@@ -388,7 +435,11 @@ function mapDashboard(json) {
   if (!data) return result
 
   var viewer = isObject(data.viewer) ? data.viewer : null
-  var login = viewer ? safeStr(viewer.login, "") : ""
+  // Prefer the response identity, but a partial response with no usable
+  // viewer.login must keep using the identity already established by an
+  // earlier probe/dashboard instead of silently dropping ownership pills.
+  var login = viewer ? normalizeLogin(viewer.login) : ""
+  if (!login) login = normalizeLogin(knownLogin)
   result.login = login
   // A connection only counts as resolved when `nodes` is an array -- a
   // malformed/missing `nodes` is unparsed, not "empty", so the section
@@ -778,6 +829,9 @@ if (typeof module !== "undefined" && module.exports) {
     apiUrlToWebUrl: apiUrlToWebUrl,
     mapNotifications: mapNotifications,
     remapNotificationsExternal: remapNotificationsExternal,
+    remapExternalOwnership: remapExternalOwnership,
+    remapRepoUrls: remapRepoUrls,
+    normalizeLogin: normalizeLogin,
     mapDashboard: mapDashboard,
     ciRollupToState: ciRollupToState,
     relativeTime: relativeTime,

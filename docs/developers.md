@@ -10,7 +10,7 @@ The design record for this plugin, for a new contributor. The README covers usin
 | `manifest.json` | Kinds `["service", "bar-widget"]`, `keepLoaded: true`. `entryPoints.service` is `Service.qml`, `entryPoints.barWidget` is `BarWidget.qml`. |
 | `Service.qml` | All state and every `gh` `Process`: the ghPath resolver, the auth probe, the dashboard poller, the notifications poller. **Instantiated exactly once, machine-wide**, by `shell.ensureService()` the first time any bar widget or panel resolves it. |
 | `BarWidget.qml` | The bar-slot entry point (one instance per monitor). Resolves the singleton via `shell.serviceFor("halmylyseas.github-status")`, always null-guarded — the bar paints before the service resolves. Owns the button + icon/count-pill, a bottom-right status dot for a degraded `statusSeverity`, and hosts `Panel.qml` through an eager `Loader` (`active: true`). |
-| `Panel.qml` | The popup: Hero, search, then five independently-foldable sections (Inbox, Review requests, My open PRs, My open issues, Repositories). Each session opens with every section folded; state is local only. During an active search, matching sections temporarily expand and zero-match sections fold, then clearing restores the manual layout. Receives `bar`, `settings`, `anchorItem`, `hostWidget` from `BarWidget.injectPanel()` — it resolves `service` itself via the same `shell.serviceFor()` call. |
+| `Panel.qml` | The popup: Hero, search, then five independently-foldable sections (Inbox, Review requests, My open PRs, My open issues, Repositories). Each session opens with every section folded; state is local only. During an active search, matching sections temporarily expand and zero-match sections fold; clearing restores the manual layout, including any explicit header toggle made during the search. Receives `bar`, `settings`, `anchorItem`, `hostWidget` from `BarWidget.injectPanel()` — it resolves `service` itself via the same `shell.serviceFor()` call. |
 | `Model.js` | Pure ES5 logic: `gh` JSON → UI-shape mapping functions, the URL allowlist, the failure classifier, field/list caps. No Quickshell imports, so plain Node can `require()` it (`test/model.test.js`). |
 | `SectionHeader.qml` | Shared section header: label, right-aligned count/`"N of T"`/`"…"` pill, optional `extra` slot (the My open issues Subscribed chip), click-to-fold. |
 
@@ -103,11 +103,12 @@ pollers' own signal is authoritative after. On any transition to `no-gh`/`unauth
 pollers stop (`pollersActive = false`) and `reProbeTimer` (5 min, probe-shortenable) arms;
 `handleProbeResult`'s success path clears a stale poller status back to `"loading"` — without
 this, mid-session recovery (`gh` reappearing, re-authenticating) would deadlock on a status
-nothing re-evaluates once set. The dashboard response's `viewer.login` is captured the first time
-it's seen and followed again on a later change: an account switch re-derives notification
-ownership on the next dashboard poll. Dashboard-derived sections (PRs, repos, issues) are already
-mapped against their own response's `viewer.login`; a partial response with no
-`viewer` fails safe to not-external for that poll.
+nothing re-evaluates once set. The response's `viewer.login` is normalized and applied through the service's single
+`_applyLogin` path, used by both the auth probe and the dashboard. A changed login
+re-derives ownership for notifications, PRs, review requests, and issues, rebuilds repo URLs,
+and clears the notifications ETag so the next poll cannot reuse an account-bound validator.
+A partial response with no usable `viewer.login` falls back to the last known login; mapping
+with an empty login remains fail-safe to not-external.
 
 `api-error` means GitHub (or `gh`) answered with an error — HTTP 5xx, an exit-0 malformed body,
 or an output-overflow kill (the plugin's own cap cut a real response short, detail `"response too

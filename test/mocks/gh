@@ -175,6 +175,10 @@ if [[ "${1:-}" == "api" && "${2:-}" == "-i" && "${3:-}" == "notifications" ]]; t
       echo "gh: HTTP 304" >&2
       exit 1
       ;;
+    http-304-exit0)
+      cat "$FIXTURES/notifications-i-304.txt"
+      exit 0
+      ;;
     *)
       if [[ -n "$if_none_match" && "$if_none_match" == '"mock-etag-v1"' ]]; then
         cat "$FIXTURES/notifications-i-304.txt"

@@ -49,9 +49,9 @@ From the bar you can see, at a glance and in one click:
   narrows to matching title/repo/owner/name in place; count pills reflect
   what's actually shown while you search. Matching sections temporarily
   expand while zero-match sections stay folded; clearing the query restores
-  the layout you had before searching. Esc clears the query first, then
-  closes the panel on a second press; a clear (✕) button is always available
-  too.
+  the manual layout (a header toggle made during search updates that saved
+  layout). Esc clears the query first, then closes the panel on a second
+  press; a clear (✕) button is always available too.
 - **Last commenter on hover** — hover a PR, review-request, or issue row to
   see who commented last and how long ago, when there's a comment to show.
 - **Folded sections** — every panel session starts with all sections folded.

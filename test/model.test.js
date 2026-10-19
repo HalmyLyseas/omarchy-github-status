@@ -1446,6 +1446,97 @@ test("isNotificationsBodyValid: false on a malformed exit-0 envelope (C4)", func
   assert.strictEqual(Model.isNotificationsBodyValid(undefined), false)
 })
 
+// ---------------------------------------------------------- normalizeLogin
+
+test("normalizeLogin: accepts GitHub-shaped logins, trims surrounding whitespace", function () {
+  assert.strictEqual(Model.normalizeLogin("HalmyLyseas"), "HalmyLyseas")
+  assert.strictEqual(Model.normalizeLogin("octocat"), "octocat")
+  assert.strictEqual(Model.normalizeLogin("someone-else"), "someone-else")
+  assert.strictEqual(Model.normalizeLogin("  octocat  "), "octocat")
+  assert.strictEqual(Model.normalizeLogin("a"), "a")
+  assert.strictEqual(Model.normalizeLogin("a".repeat(39)), "a".repeat(39))
+})
+
+test("normalizeLogin: rejects malformed, overlong and non-string identities", function () {
+  assert.strictEqual(Model.normalizeLogin(""), "")
+  assert.strictEqual(Model.normalizeLogin(null), "")
+  assert.strictEqual(Model.normalizeLogin(undefined), "")
+  assert.strictEqual(Model.normalizeLogin(42), "")
+  assert.strictEqual(Model.normalizeLogin("-octocat"), "")
+  assert.strictEqual(Model.normalizeLogin("octocat-"), "")
+  assert.strictEqual(Model.normalizeLogin("octo_cat"), "")
+  assert.strictEqual(Model.normalizeLogin("octo cat"), "")
+  assert.strictEqual(Model.normalizeLogin("octo\ncat"), "")
+  assert.strictEqual(Model.normalizeLogin("é"), "")
+  assert.strictEqual(Model.normalizeLogin("a".repeat(40)), "")
+})
+
+test("mapNotifications: an invalid/overlong login can never mark a row external", function () {
+  var mapped = Model.mapNotifications([
+    { id: "1", unread: true, subject: { title: "t", url: "" }, repository: { full_name: "HalmyLyseas/r" } }
+  ], "a".repeat(40))
+  assert.strictEqual(mapped[0].isExternal, false)
+})
+
+// -------------------------------------------------- dashboard login remapping
+
+test("remapExternalOwnership: changes only isExternal, preserves every other field and the input", function () {
+  var before = [
+    { owner: "HalmyLyseas", isExternal: false, title: "own", number: 1 },
+    { owner: "octocat", isExternal: false, title: "external", number: 2 }
+  ]
+  var after = Model.remapExternalOwnership(before, "SomeoneElse")
+  assert.deepStrictEqual(after.map(function (x) { return x.isExternal }), [true, true])
+  assert.strictEqual(after[0].title, "own")
+  assert.strictEqual(after[1].number, 2)
+  assert.strictEqual(before[0].isExternal, false, "input rows must not be mutated")
+  assert.notStrictEqual(after, before)
+})
+
+test("remapExternalOwnership: non-array/adversarial input never throws", function () {
+  assert.deepStrictEqual(Model.remapExternalOwnership(null, "x"), [])
+  assert.deepStrictEqual(Model.remapExternalOwnership("not an array", "x"), [])
+  assert.deepStrictEqual(Model.remapExternalOwnership([null, "garbage", 5], "x"), [null, "garbage", 5])
+})
+
+test("remapRepoUrls: rebuilds repo URLs for the new login and preserves input", function () {
+  var before = [{ name: "omarchy-site", url: "https://github.com/HalmyLyseas/omarchy-site", pushedAt: "x" }]
+  var after = Model.remapRepoUrls(before, "SomeoneElse")
+  assert.strictEqual(after[0].url, "https://github.com/SomeoneElse/omarchy-site")
+  assert.strictEqual(after[0].name, "omarchy-site")
+  assert.strictEqual(after[0].pushedAt, "x")
+  assert.strictEqual(before[0].url, "https://github.com/HalmyLyseas/omarchy-site", "input rows must not be mutated")
+})
+
+test("remapRepoUrls: non-array/adversarial input never throws", function () {
+  assert.deepStrictEqual(Model.remapRepoUrls(null, "x"), [])
+  assert.deepStrictEqual(Model.remapRepoUrls("not an array", "x"), [])
+  assert.deepStrictEqual(Model.remapRepoUrls([null, "garbage", 5], "x"), [null, "garbage", 5])
+})
+
+test("mapDashboard: known login is the fallback when viewer.login is missing or invalid", function () {
+  var parsed = {
+    data: {
+      viewer: {
+        openPRs: { nodes: [{ title: "t", url: "https://github.com/HalmyLyseas/r/pull/1",
+          number: 1, updatedAt: "2026-01-01T00:00:00Z", repository: { nameWithOwner: "HalmyLyseas/r" } }] },
+        repositories: { nodes: [{ name: "r" }] },
+        myIssues: { nodes: [] }
+      },
+      reviewRequests: { nodes: [] }
+    }
+  }
+  var fallback = Model.mapDashboard(parsed, "SomeoneElse")
+  assert.strictEqual(fallback.login, "SomeoneElse")
+  assert.strictEqual(fallback.openPRs[0].isExternal, true)
+  assert.strictEqual(fallback.repos[0].url, "https://github.com/SomeoneElse/r")
+
+  parsed.data.viewer.login = "not a login"
+  var invalid = Model.mapDashboard(parsed, "octocat")
+  assert.strictEqual(invalid.login, "octocat")
+  assert.strictEqual(invalid.repos[0].url, "https://github.com/octocat/r")
+})
+
 // ------------------------------------------------------------------------------ summary
 
 console.log("")

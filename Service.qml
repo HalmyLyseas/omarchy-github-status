@@ -57,9 +57,10 @@ Item {
   readonly property double _notificationsTimerIntervalMs: notificationsTimer.interval
   readonly property bool _dashboardTimerRunning: dashboardTimer.running
   readonly property bool _notificationsTimerRunning: notificationsTimer.running
-  // Debug-only: the login learned so far -- never logged beyond the one
-  // transition line in _captureLoginFromDashboard, held in memory only.
+  // Debug-only: the login learned so far and the current notifications
+  // ETag, so probes can verify ownership remaps and account-bound cache clears.
   readonly property string _login: internal.login
+  readonly property string _notificationsEtag: internal.notificationsEtag
   // Debug-only: how many current notifications are flagged external, so a
   // probe can confirm a login switch actually re-derived ownership.
   readonly property int _notificationsExternalCount: internal.notifications.filter(function (n) {
@@ -995,7 +996,7 @@ Item {
   function handleProbeResult(exitCode, rawOut, rawErr) {
     if (exitCode === 0) {
       var login = String(rawOut || "").replace(/^\s+|\s+$/g, "")
-      if (login) internal.login = login
+      if (login) _applyLogin(login)
       log("sign-in check: authenticated")
       onFetchSuccess("probe")
       // Mid-session recovery: a poller that previously recorded
@@ -1136,21 +1137,28 @@ Item {
     }
   }
 
-  // Capture the login the first time it's seen, or follow it across a
-  // later `gh` account switch -- either way, notifications already fetched
-  // under the old login are re-derived so isExternal stays accurate.
-  function _captureLoginFromDashboard(login) {
-    if (!login || login === internal.login) return
+  // Single login-application path for both the auth probe and dashboard.
+  // A login change invalidates every login-derived field and the account-
+  // scoped notifications ETag; completed rows are remapped in place.
+  function _applyLogin(login) {
+    var next = Model.normalizeLogin(login)
+    if (!next || next === internal.login) return false
     var previous = internal.login
-    internal.login = login
+    internal.login = next
     if (previous) {
-      log("login changed (" + previous + " -> " + login + ") -- re-deriving ownership")
+      log("login changed (" + previous + " -> " + next + ") -- re-deriving ownership")
     } else {
-      log("login learned opportunistically from dashboard response")
+      log("login learned")
     }
-    if (internal.notifications.length > 0) {
-      internal.notifications = Model.remapNotificationsExternal(internal.notifications, internal.login)
-    }
+    internal.notifications = Model.remapNotificationsExternal(internal.notifications, next)
+    internal.openPRs = Model.remapExternalOwnership(internal.openPRs, next)
+    internal.reviewRequests = Model.remapExternalOwnership(internal.reviewRequests, next)
+    internal.myIssues = Model.remapExternalOwnership(internal.myIssues, next)
+    internal.repos = Model.remapRepoUrls(internal.repos, next)
+    // ETags are tied to the authenticated resource; never let a new account
+    // inherit the old request validator.
+    internal.notificationsEtag = ""
+    return true
   }
 
   // Counts parsed vs. null sections: all -> ok, some -> dashboardPartial,
@@ -1162,7 +1170,9 @@ Item {
     var hasDataEnvelope = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
       && parsed.data !== null && typeof parsed.data === "object" && !Array.isArray(parsed.data)
     if (exitCode === 0 || hasDataEnvelope) {
-      var mapped = parsed ? Model.mapDashboard(parsed) : { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
+      var mapped = parsed
+        ? Model.mapDashboard(parsed, internal.login)
+        : { openPRs: null, reviewRequests: null, repos: null, myIssues: null, login: "" }
       var sections = [mapped.openPRs, mapped.reviewRequests, mapped.repos, mapped.myIssues]
       var parsedCount = sections.filter(function (s) { return s !== null }).length
       if (parsedCount === 0) {
@@ -1172,11 +1182,13 @@ Item {
           "unparseable response")
         return
       }
+      // Remap retained last-good rows before replacing the sections that
+      // did resolve; the new mapped rows already use the response identity.
+      if (mapped.login) _applyLogin(mapped.login)
       if (mapped.openPRs !== null) { internal.openPRs = mapped.openPRs; internal.openPRsTotal = mapped.openPRsTotal }
       if (mapped.reviewRequests !== null) { internal.reviewRequests = mapped.reviewRequests; internal.reviewRequestsTotal = mapped.reviewRequestsTotal }
       if (mapped.repos !== null) { internal.repos = mapped.repos; internal.reposTotal = mapped.reposTotal }
       if (mapped.myIssues !== null) { internal.myIssues = mapped.myIssues; internal.myIssuesTotal = mapped.myIssuesTotal }
-      _captureLoginFromDashboard(mapped.login)
       internal.dashboardPartial = parsedCount < sections.length
       if (internal.dashboardPartial) {
         log("dashboard fetch: partial GraphQL errors -- kept the section(s) that parsed: "
@@ -1272,8 +1284,16 @@ Item {
   // An exit-0 response is only trusted with a 200 status and an array
   // body -- anything else is a failure that keeps the last-good data.
   function handleNotificationsExit(exitCode, rawOut, rawErr) {
+    var parsed = Model.parseHeadersAndBody(rawOut)
+    // A real 304 is success whether gh reports it with exit 0 or exit 1;
+    // the harness has observed the nonzero shape, but do not depend on it.
+    if (parsed.status === 304) {
+      if (parsed.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed.etag)
+      log("notifications: no change (304)")
+      onFetchSuccess("notifications")
+      return
+    }
     if (exitCode === 0) {
-      var parsed = Model.parseHeadersAndBody(rawOut)
       if (Model.isNotificationsBodyValid(parsed)) {
         if (parsed.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed.etag)
         internal.notifications = Model.mapNotifications(parsed.body, internal.login)
@@ -1287,8 +1307,7 @@ Item {
     }
     var cls = Model.classifyFailure(rawErr, exitCode)
     if (cls === "http-304") {
-      var parsed304 = Model.parseHeadersAndBody(rawOut)
-      if (parsed304.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed304.etag)
+      if (parsed.etag) internal.notificationsEtag = Model.sanitizeEtag(parsed.etag)
       log("notifications: no change (304)")
       onFetchSuccess("notifications")
       return

@@ -51,3 +51,8 @@ test("QML palette references use the Qt 6.12-safe Commons namespace", () => {
     assert.deepEqual(missingImports, [],
         "files using Commons.Color must import qs.Commons as Commons");
 });
+
+test("bar tooltip does not claim an empty inbox while the service is loading", () => {
+    const source = readFileSync(join(__dirname, "..", "BarWidget.qml"), "utf8");
+    assert.match(source, /status === "loading"[\s\S]{0,80}GitHub Status — loading/);
+});

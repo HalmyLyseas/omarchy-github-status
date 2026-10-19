@@ -39,6 +39,7 @@ BarWidget {
   readonly property string tooltipSummary: {
     if (!svc) return "GitHub Status"
     var status = svc.status
+    if (status === "loading") return "GitHub Status — loading"
     if (status === "no-gh") return "GitHub Status — gh CLI not found"
     if (status === "unauthenticated") return "GitHub Status — not signed in"
     if (status === "offline") return "GitHub Status — offline"
