@@ -31,4 +31,6 @@ test("the clipboard job is bounded, deadlined and killable", () => {
     assert.match(job, /signal\(15\)/);
     assert.match(job, /signal\(9\)/);
     assert.match(job, /"\/usr\/bin\/wl-paste"/);
+    assert.match(job, /pkillPath/);
+    assert.match(job, /"-P"/);
 });

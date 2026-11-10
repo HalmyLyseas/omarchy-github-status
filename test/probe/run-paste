@@ -79,7 +79,7 @@ check_orphans() {
   local label="$1"
   local mocklog="$OUT_DIR/$label.mock.log"
   local leaked=0 pid state
-  for pid in $(grep -oP '^PID=\K[0-9]+' "$mocklog" 2>/dev/null | sort -u); do
+  for pid in $(grep -oP '^(PID|CHILD)=\K[0-9]+' "$mocklog" 2>/dev/null | sort -u); do
     state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)"
     [[ -n "$state" && "$state" != "Z" && "$state" != "X" ]] || continue
     leaked=1
@@ -101,6 +101,7 @@ run_scenario missing missing normal "" "/nonexistent/wl-paste"
 run_scenario cap-ok cap-ok cap-ok "" "$MOCK"
 run_scenario cap-over cap-over cap-over "" "$MOCK"
 run_scenario term-ignore term-ignore term-ignore "" "$MOCK"
+run_scenario tree tree tree "" "$MOCK"
 
 check_result normal "$(cat "$OUT_DIR/normal.logpath")" true "hello" ""
 check_result primary "$(cat "$OUT_DIR/primary.logpath")" true "primary" ""
@@ -114,10 +115,11 @@ check_result missing "$(cat "$OUT_DIR/missing.logpath")" false "" "clipboard rea
 check_result cap-ok "$(cat "$OUT_DIR/cap-ok.logpath")" true "" ""
 check_result cap-over "$(cat "$OUT_DIR/cap-over.logpath")" false "" "clipboard too large"
 check_result term-ignore "$(cat "$OUT_DIR/term-ignore.logpath")" false "" "clipboard timed out"
+check_result tree "$(cat "$OUT_DIR/tree.logpath")" false "" "clipboard timed out"
 [[ "$(field "$(cat "$OUT_DIR/cap-ok.logpath")" textLength)" == "64" ]] && ok "cap-ok: accepted exactly the 64-character cap" \
   || not_ok "cap-ok: accepted exactly the 64-character cap (got: $(field "$(cat "$OUT_DIR/cap-ok.logpath")" textLength))"
 
-for label in normal primary oversized stall cancel fail missing cap-ok cap-over term-ignore; do check_orphans "$label"; done
+for label in normal primary oversized stall cancel fail missing cap-ok cap-over term-ignore tree; do check_orphans "$label"; done
 
 echo
 if [[ "$fail_count" -eq 0 ]]; then

@@ -39,6 +39,13 @@ case "$MODE" in
     printf 'x'
     while :; do :; done
     ;;
+  tree)
+    trap '' TERM
+    printf 'x'
+    sleep 600 &
+    [[ -n "${WL_PASTE_LOG:-}" ]] && echo "CHILD=$!" >> "$WL_PASTE_LOG"
+    wait
+    ;;
   slow)
     while :; do printf 'x'; sleep 0.1; done
     ;;

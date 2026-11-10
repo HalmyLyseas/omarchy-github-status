@@ -13,7 +13,7 @@ The design record for this plugin, for a new contributor. The README covers usin
 | `Panel.qml` | The popup: Hero, search, then five independently-foldable sections (Inbox, Review requests, My open PRs, My open issues, Repositories). Each session opens with every section folded; state is local only. During an active search, matching sections temporarily expand and zero-match sections fold; clearing restores the manual layout, including any explicit header toggle made during the search. Receives `bar`, `settings`, `anchorItem`, `hostWidget` from `BarWidget.injectPanel()` — it resolves `service` itself via the same `shell.serviceFor()` call. |
 | `Model.js` | Pure ES5 logic: `gh` JSON → UI-shape mapping functions, the URL allowlist, the failure classifier, field/list caps. No Quickshell imports, so plain Node can `require()` it (`test/model.test.js`). |
 | `SectionHeader.qml` | Shared section header: label, right-aligned count/`"N of T"`/`"…"` pill, optional `extra` slot (the My open issues Subscribed chip), click-to-fold. |
-| `PasteJob.qml` | Bounded clipboard read for the search field: direct `wl-paste` child, 4,096-character cap, 1.5 s deadline, TERM/KILL escalation and cancellation. |
+| `PasteJob.qml` | Bounded clipboard read for the search field: direct `wl-paste` child, 4,096-character cap, 1.5 s deadline, TERM/KILL escalation with `pkill -P` descendant cleanup, and cancellation. |
 
 ### Injection contract
 
@@ -233,7 +233,7 @@ only when ready to ship.
   `statusSeverity`/status dot and `statusHint` text, the partial-dashboard surface, search
   narrowing, fold/unfold, the `svc` null→new-instance lifecycle, and item navigation (rejected
   URLs stay open; a safe handoff closes the popup).
-- `test/probe/run-paste` — the real `PasteJob.qml` against a mode-driven `wl-paste` mock: normal and primary selection, the exact 64-character cap boundary, oversized, stalled, TERM-ignoring, failed, cancelled and missing-provider paths, with orphan checks.
+- `test/probe/run-paste` — the real `PasteJob.qml` against a mode-driven `wl-paste` mock: normal and primary selection, the exact 64-character cap boundary, oversized, stalled, TERM-ignoring, failed, cancelled, missing-provider and parent-with-child paths, with orphan checks.
 - `test/paste-routes.test.js` (Node) — pins the intercepted keyboard, middle-click and context-menu routes and the bounded job's cap/deadline/kill contract.
 - `test/probe/run-scoped-settings` — a third `qs -n -p` instance driving the real
   `PluginShellApi.qml`/`BarWidget.qml`/`Panel.qml` against a temp `shell.json`: seeded values, no
