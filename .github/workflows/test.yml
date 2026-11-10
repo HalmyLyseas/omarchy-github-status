@@ -90,3 +90,6 @@ jobs:
           cage -- bash test/probe/run
           cage -- bash test/probe/run-ui
           cage -- bash test/probe/run-scoped-settings
+
+      - name: Bounded paste probe (minimal platform)
+        run: bash test/probe/run-paste

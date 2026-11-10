@@ -13,6 +13,7 @@ The design record for this plugin, for a new contributor. The README covers usin
 | `Panel.qml` | The popup: Hero, search, then five independently-foldable sections (Inbox, Review requests, My open PRs, My open issues, Repositories). Each session opens with every section folded; state is local only. During an active search, matching sections temporarily expand and zero-match sections fold; clearing restores the manual layout, including any explicit header toggle made during the search. Receives `bar`, `settings`, `anchorItem`, `hostWidget` from `BarWidget.injectPanel()` — it resolves `service` itself via the same `shell.serviceFor()` call. |
 | `Model.js` | Pure ES5 logic: `gh` JSON → UI-shape mapping functions, the URL allowlist, the failure classifier, field/list caps. No Quickshell imports, so plain Node can `require()` it (`test/model.test.js`). |
 | `SectionHeader.qml` | Shared section header: label, right-aligned count/`"N of T"`/`"…"` pill, optional `extra` slot (the My open issues Subscribed chip), click-to-fold. |
+| `PasteJob.qml` | Bounded clipboard read for the search field: direct `wl-paste` child, 4,096-character cap, 1.5 s deadline, TERM/KILL escalation and cancellation. |
 
 ### Injection contract
 
@@ -165,6 +166,9 @@ on an unpinned major.
   `test/qml-sinks.test.js`, see "Testing" below) — a hostile relay/title/headline can never
   render as rich text. `SafeToolTip` in `Panel.qml` is a drop-in `PanelToolTip` replacement that
   forces this.
+- **Bounded paste.** Native paste routes are intercepted; `PasteJob.qml` reads the selection
+  through a direct `wl-paste` child with a byte cap, deadline and kill escalation, never the
+  unbounded synchronous Qt path.
 - **No disk cache of GitHub data.** Every list lives in QML memory only. The one disk write is
   its settings entry, via `bar.shell.updateEntryInline()` — which **replaces** the whole entry;
   `Model.mergedSettings()` merges from `settingsEntry`, refusing a write when it's null (see
@@ -229,6 +233,7 @@ only when ready to ship.
   `statusSeverity`/status dot and `statusHint` text, the partial-dashboard surface, search
   narrowing, fold/unfold, the `svc` null→new-instance lifecycle, and item navigation (rejected
   URLs stay open; a safe handoff closes the popup).
+- `test/probe/run-paste` — the real `PasteJob.qml` against a mode-driven `wl-paste` mock: normal and primary selection, oversized, stalled, failed, cancelled and missing-provider paths, with orphan checks.
 - `test/probe/run-scoped-settings` — a third `qs -n -p` instance driving the real
   `PluginShellApi.qml`/`BarWidget.qml`/`Panel.qml` against a temp `shell.json`: seeded values, no
   boot write, the toggle round trip preserving siblings, malformed/deleted config, a written

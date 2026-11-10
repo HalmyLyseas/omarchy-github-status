@@ -80,6 +80,8 @@ else
   run_step cage -- bash "$SCRIPT_DIR/probe/run-scoped-settings"
 fi
 
+run_step bash "$SCRIPT_DIR/probe/run-paste"
+
 echo
 if [[ $overall -eq 0 ]]; then
   echo "test/ci-local: ALL SUITES PASSED"

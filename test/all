@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# test/all -- runs every test suite in this repo (Node unit tests, the QML
-# Text-sink audit, both probe suites); exits non-zero if any suite fails.
+# test/all -- runs every test suite in this repo (Node unit tests and every
+# probe suite); exits non-zero if any suite fails.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,6 +48,11 @@ if [[ $? -ne 0 ]]; then overall=1; fi
 echo
 echo "== test/probe/run-scoped-settings (scoped-host settings probe suite) =="
 bash "$SCRIPT_DIR/probe/run-scoped-settings"
+if [[ $? -ne 0 ]]; then overall=1; fi
+
+echo
+echo "== test/probe/run-paste (bounded clipboard probe suite) =="
+bash "$SCRIPT_DIR/probe/run-paste"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo

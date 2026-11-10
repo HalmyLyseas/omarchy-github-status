@@ -413,6 +413,27 @@ function matchesQuery(item, query) {
   return false
 }
 
+// Inserts a bounded clipboard read at the current selection. Control
+// characters become spaces, whitespace collapses, and the result is capped at
+// QUERY_CAP. Null-ish offsets fall back to the cursor, then the end.
+function pasteQuery(current, selectionStart, selectionEnd, cursor, pasted) {
+  var value = isString(current) ? current : String(current || "")
+  var clean = isString(pasted) ? pasted : String(pasted || "")
+  clean = clean.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "")
+  var start = Number(selectionStart)
+  var end = Number(selectionEnd)
+  var at = Number(cursor)
+  if (!isFinite(start) || start < 0 || !isFinite(end) || end < 0) {
+    start = end = isFinite(at) && at >= 0 ? at : value.length
+  }
+  if (start > end) { var swap = start; start = end; end = swap }
+  start = Math.min(start, value.length)
+  end = Math.min(end, value.length)
+  if (clean === "") return { text: value, cursor: start }
+  var next = (value.slice(0, start) + clean + value.slice(end)).slice(0, QUERY_CAP)
+  return { text: next, cursor: Math.min(next.length, start + clean.length) }
+}
+
 // "focus" (default) keeps myIssues rows still subscribed (`subscribed !==
 // false`, so a legacy item missing the field fails open); "all" is a
 // pass-through copy. Any other mode is treated as "focus". Never mutates.
@@ -853,6 +874,7 @@ if (typeof module !== "undefined" && module.exports) {
     lastComment: lastComment,
     subscribedFromViewerSubscription: subscribedFromViewerSubscription,
     matchesQuery: matchesQuery,
+    pasteQuery: pasteQuery,
     filterIssues: filterIssues,
     DASHBOARD_QUERY: DASHBOARD_QUERY,
     sanitizeEtag: sanitizeEtag,

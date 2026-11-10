@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# test/probe/run-paste -- bounded-paste suite. Runs the real PasteJob against
+# a mode-driven wl-paste mock; no real selection is read.
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+MOCK="$PLUGIN_DIR/test/mocks/wl-paste"
+OUT_DIR="$(mktemp -d)"
+trap 'rm -rf "$OUT_DIR"' EXIT
+mkdir -m 700 "$OUT_DIR/runtime"
+
+fail_count=0
+pass_count=0
+ok() { pass_count=$((pass_count + 1)); echo "ok - $1"; }
+not_ok() { fail_count=$((fail_count + 1)); echo "NOT OK - $1"; }
+
+if ! command -v qs >/dev/null 2>&1; then
+  echo "test/probe/run-paste: no \`qs\` on PATH (no Wayland session?) -- skipping"
+  exit 0
+fi
+
+run_scenario() {
+  local label="$1" scenario="$2" mode="$3" text="$4" mock="$5"
+  local log="$OUT_DIR/$label.log" mocklog="$OUT_DIR/$label.mock.log"
+  : > "$mocklog"
+  env GHS_PLUGIN_DIR="$PLUGIN_DIR" PASTE_MOCK="$mock" PASTE_SCENARIO="$scenario" \
+    WL_PASTE_MODE="$mode" WL_PASTE_TEXT="$text" WL_PASTE_LOG="$mocklog" \
+    XDG_RUNTIME_DIR="$OUT_DIR/runtime" QT_QPA_PLATFORM=minimal \
+    timeout 10 qs -n -p "$PLUGIN_DIR/test/probe/paste-probe.qml" > "$log" 2>&1
+  echo "$?" > "$OUT_DIR/$label.exit"
+  echo "$log" > "$OUT_DIR/$label.logpath"
+}
+
+field() {
+  node -e '
+    const fs = require("node:fs");
+    const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter(l => l.includes("PASTE_RESULT "));
+    if (lines.length !== 1) { process.stdout.write(""); process.exit(0); }
+    try {
+      const data = JSON.parse(lines[0].split("PASTE_RESULT ")[1]);
+      const value = data[process.argv[2]];
+      process.stdout.write(value === undefined || value === null ? "" : String(value));
+    } catch (e) { process.stdout.write(""); }
+  ' "$1" "$2"
+}
+
+check_result() {
+  local label="$1" log="$2" want_ok="$3" want_text="$4" want_error="$5"
+  local code
+  code="$(cat "$OUT_DIR/$label.exit" 2>/dev/null || echo "")"
+  [[ "$code" == "0" ]] && ok "$label: qs exited 0" || not_ok "$label: qs exited 0 (got ${code:-unknown})"
+  if ! grep -q 'PASTE_RESULT ' "$log"; then
+    not_ok "$label: probe printed a PASTE_RESULT line"
+    return
+  fi
+  ok "$label: probe printed a PASTE_RESULT line"
+  [[ "$(field "$log" ok)" == "$want_ok" ]] && ok "$label: ok=$want_ok" \
+    || not_ok "$label: ok=$want_ok (got: $(field "$log" ok))"
+  if [[ -n "$want_text" ]]; then
+    [[ "$(field "$log" text)" == "$want_text" ]] && ok "$label: text matches" \
+      || not_ok "$label: text matches (got: $(field "$log" text))"
+  fi
+  if [[ -n "$want_error" ]]; then
+    [[ "$(field "$log" error)" == "$want_error" ]] && ok "$label: error=$want_error" \
+      || not_ok "$label: error=$want_error (got: $(field "$log" error))"
+  fi
+  [[ "$(field "$log" busy)" == "false" ]] && ok "$label: job is idle after finish" \
+    || not_ok "$label: job is idle after finish (got: $(field "$log" busy))"
+  [[ "$(field "$log" pid)" == "0" ]] && ok "$label: no armed child remains" \
+    || not_ok "$label: no armed child remains (got: $(field "$log" pid))"
+  local errors
+  errors="$(grep -c 'TypeError\|ReferenceError\|ERROR:' "$log" 2>/dev/null || true)"
+  [[ "${errors:-0}" == "0" ]] && ok "$label: 0 engine errors" \
+    || not_ok "$label: 0 engine errors (got $errors)"
+}
+
+check_orphans() {
+  local label="$1"
+  local mocklog="$OUT_DIR/$label.mock.log"
+  local leaked=0 pid state
+  for pid in $(grep -oP '^PID=\K[0-9]+' "$mocklog" 2>/dev/null | sort -u); do
+    state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)"
+    [[ -n "$state" && "$state" != "Z" && "$state" != "X" ]] || continue
+    leaked=1
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 0.2
+    kill -KILL "$pid" 2>/dev/null || true
+    echo "  orphan: PID $pid survived the bounded paste"
+  done
+  [[ "$leaked" -eq 0 ]] && ok "$label: no orphaned wl-paste" || not_ok "$label: no orphaned wl-paste"
+}
+
+run_scenario normal normal normal "hello" "$MOCK"
+run_scenario primary primary primary "primary" "$MOCK"
+run_scenario oversized oversized flood "" "$MOCK"
+run_scenario stall stall stall "" "$MOCK"
+run_scenario cancel cancel slow "" "$MOCK"
+run_scenario fail fail fail "" "$MOCK"
+run_scenario missing missing normal "" "/nonexistent/wl-paste"
+
+check_result normal "$(cat "$OUT_DIR/normal.logpath")" true "hello" ""
+check_result primary "$(cat "$OUT_DIR/primary.logpath")" true "primary" ""
+grep -q 'PRIMARY=1' "$OUT_DIR/primary.mock.log" && ok "primary: wl-paste was asked for the primary selection" \
+  || not_ok "primary: wl-paste was asked for the primary selection"
+check_result oversized "$(cat "$OUT_DIR/oversized.logpath")" false "" "clipboard too large"
+check_result stall "$(cat "$OUT_DIR/stall.logpath")" false "" "clipboard timed out"
+check_result cancel "$(cat "$OUT_DIR/cancel.logpath")" false "" "cancelled"
+check_result fail "$(cat "$OUT_DIR/fail.logpath")" false "" "clipboard read failed"
+check_result missing "$(cat "$OUT_DIR/missing.logpath")" false "" "clipboard read failed"
+
+for label in normal primary oversized stall cancel fail missing; do check_orphans "$label"; done
+
+echo
+if [[ "$fail_count" -eq 0 ]]; then
+  echo "test/probe/run-paste: ALL CHECKS PASSED ($pass_count ok)"
+  exit 0
+fi
+echo "test/probe/run-paste: $fail_count FAILURE(S), $pass_count ok"
+exit 1

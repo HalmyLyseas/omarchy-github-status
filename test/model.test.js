@@ -791,6 +791,31 @@ test("subscribedFromViewerSubscription: missing/null field fails OPEN (true) -- 
   assert.strictEqual(Model.subscribedFromViewerSubscription(null), true)
 })
 
+// ---------------------------------------------------------------------- pasteQuery
+
+test("pasteQuery: inserts at the cursor and replaces a selection", function () {
+  assert.deepStrictEqual(Model.pasteQuery("abc", 1, 1, 1, "X"), { text: "aXbc", cursor: 2 })
+  assert.deepStrictEqual(Model.pasteQuery("abcdef", 1, 4, 4, "Z"), { text: "aZef", cursor: 2 })
+  assert.deepStrictEqual(Model.pasteQuery("abcdef", 4, 1, 4, "Z"), { text: "aZef", cursor: 2 })
+})
+
+test("pasteQuery: falls back to the cursor or end for invalid offsets", function () {
+  assert.deepStrictEqual(Model.pasteQuery("abc", -1, -1, 2, "X"), { text: "abXc", cursor: 3 })
+  assert.deepStrictEqual(Model.pasteQuery("abc", -1, -1, -1, "X"), { text: "abcX", cursor: 4 })
+})
+
+test("pasteQuery: strips control characters, collapses whitespace and caps at QUERY_CAP", function () {
+  assert.deepStrictEqual(Model.pasteQuery("", 0, 0, 0, "a\nb\t c"), { text: "a b c", cursor: 5 })
+  var long = "x".repeat(Model.QUERY_CAP - 10) + "y".repeat(20)
+  var result = Model.pasteQuery("", 0, 0, 0, long)
+  assert.strictEqual(result.text.length, Model.QUERY_CAP)
+  assert.strictEqual(result.text, long.slice(0, Model.QUERY_CAP))
+})
+
+test("pasteQuery: empty/whitespace paste leaves the text unchanged", function () {
+  assert.deepStrictEqual(Model.pasteQuery("abc", 1, 1, 1, "   \n"), { text: "abc", cursor: 1 })
+})
+
 // ---------------------------------------------------------------------- matchesQuery
 
 test("matchesQuery: case-insensitive substring match over title/repo/owner", function () {

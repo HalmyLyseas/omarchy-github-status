@@ -63,7 +63,11 @@ Panel {
   property bool myIssuesCollapsed: true
   property bool repoActivityCollapsed: true
 
-  onOpenedChanged: if (opened) {
+  onOpenedChanged: {
+    if (!opened) {
+      pasteJob.cancel()
+      return
+    }
     root.nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
     root.searchQuery = ""
@@ -73,6 +77,19 @@ Panel {
     root.openPRsCollapsed = true
     root.myIssuesCollapsed = true
     root.repoActivityCollapsed = true
+  }
+
+  PasteJob {
+    id: pasteJob
+    onFinished: function(success, text, error) {
+      if (!success) return
+      var result = Model.pasteQuery(searchField.text, searchField.selectionStart,
+        searchField.selectionEnd, searchField.cursorPosition, text)
+      if (!result || result.text === String(searchField.text || "")) return
+      searchField.text = result.text
+      searchField.cursorPosition = result.cursor
+      searchField.forceActiveFocus()
+    }
   }
 
   // Model.matchesQuery(item, query) is the data-layer's contract, guarded
@@ -389,6 +406,18 @@ Panel {
               // typing already reassigns `text`, breaking a plain binding.
               onTextChanged: root.searchQuery = text
 
+              // Native paste reads the whole clipboard synchronously before
+              // any length check; intercept every key route and read bounded.
+              Keys.priority: Keys.BeforeItem
+              Keys.onPressed: function(event) {
+                var pasteKey = (event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier) !== 0)
+                  || (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier) !== 0)
+                  || event.key === Qt.Key_Paste
+                if (!pasteKey) return
+                pasteJob.paste(false)
+                event.accepted = true
+              }
+
               // Esc: clear-then-close, both steps handled locally so
               // PanelKeyCatcher (blocked while this field has focus) never
               // has to know about search state at all.
@@ -400,6 +429,40 @@ Panel {
                   root.close()
                 }
                 event.accepted = true
+              }
+
+              // Primary-selection paste is another native whole-clipboard
+              // route; intercept the middle button and read it bounded.
+              MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.MiddleButton
+                onPressed: function(mouse) {
+                  mouse.accepted = true
+                  pasteJob.paste(true)
+                }
+              }
+
+              // Replace the host context menu so its Paste action also uses
+              // the bounded job instead of the native unbounded retrieval.
+              ContextMenu.menu: Menu {
+                MenuItem {
+                  text: "Cut"
+                  enabled: searchField.selectedText.length > 0
+                  onTriggered: searchField.cut()
+                }
+                MenuItem {
+                  text: "Copy"
+                  enabled: searchField.selectedText.length > 0
+                  onTriggered: searchField.copy()
+                }
+                MenuItem {
+                  text: "Paste"
+                  onTriggered: pasteJob.paste(false)
+                }
+                MenuItem {
+                  text: "Select All"
+                  onTriggered: searchField.selectAll()
+                }
               }
             }
 

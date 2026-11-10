@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# test/mocks/wl-paste -- mock of wl-clipboard's paste client, driven by
+# WL_PASTE_MODE. Modes exercise the bounded PasteJob paths without touching
+# the real selection.
+set -uo pipefail
+
+MODE="${WL_PASTE_MODE:-normal}"
+PRIMARY=0
+for arg in "$@"; do
+  [[ "$arg" == "--primary" ]] && PRIMARY=1
+done
+
+if [[ -n "${WL_PASTE_LOG:-}" ]]; then
+  echo "PID=$$ MODE=$MODE PRIMARY=$PRIMARY" >> "$WL_PASTE_LOG"
+fi
+
+case "$MODE" in
+  normal)
+    printf '%s' "${WL_PASTE_TEXT:-clipboard text}"
+    ;;
+  primary)
+    printf '%s' "${WL_PASTE_TEXT:-primary text}"
+    ;;
+  fail)
+    echo "wl-paste: mock failure" >&2
+    exit 1
+    ;;
+  flood)
+    while :; do printf '0123456789abcdef'; done
+    ;;
+  slow)
+    while :; do printf 'x'; sleep 0.1; done
+    ;;
+  stall)
+    sleep 600
+    ;;
+  *)
+    echo "wl-paste: unknown mock mode: $MODE" >&2
+    exit 2
+    ;;
+esac

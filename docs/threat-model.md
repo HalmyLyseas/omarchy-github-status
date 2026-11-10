@@ -31,6 +31,7 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
 |---|---|
 | `gh` stdout/stderr | `Model.js`'s bounded parsers (`FIELD_CAP_*`/list caps) and `classifyFailure()`/`parseHeadersAndBody()` before any value reaches a `Service.qml` property; every `Text{}` sink is `textFormat: Text.PlainText` (enforced by `test/qml-sinks.test.js`), so a hostile title/headline can never be interpreted as rich text. |
 | Persisted plugin settings (`shell.json`) | `Service.qml`'s own clamps (`dashboardIntervalSec`/`notificationsIntervalSec`/`repoLimit` ranges, `issuesFilter` enum) and `Model.mergedSettings()` — replaces only this plugin's own entry, never another plugin's; refused outright when no valid entry is loaded (see next row), never written with a partial guess. |
+| Search-field clipboard paste | Native shortcut, dedicated Paste key and middle-click/primary-selection routes are intercepted. `PasteJob.qml` runs `/usr/bin/wl-paste` as a direct child, caps the retained text at 4,096 characters, enforces a 1.5 s deadline with TERM→KILL, and is cancelled on panel close. Control characters are stripped and the query is capped at 100 characters before it reaches the filter. |
 | Scoped read of `~/.config/omarchy/shell.json` | On a host without a live `shell.shellConfig` (`scopedHost`), `Service.qml` opens a watched, non-preloading `FileView` on this file, read-only. The `FileView` reads the whole file regardless of size; `Model.ownEntryFromConfigText()` then rejects the text after reading if it exceeds 1 MiB, so the cap bounds what is parsed and retained, not the read itself. Below that cap it parses the text and retains only this plugin's own entry (a JSON round-tripped copy); anything else is discarded. This plugin never writes this file — the host writes it, via `updateEntryInline()`. |
 | Omarchy shell internals (`bar.shell.*`) | `serviceFor(id)` (read) and `updateEntryInline()` (the plugin's one write, replacing only its own `shell.json` entry) are undocumented, unversioned surface; `BarWidget.qml` null-guards every `svc` read since the service may not have resolved yet or may be destroyed/recreated by the shell. On a scoped host this surface is a capability-scoped facade limited to this plugin's own id, not the host shell itself. |
 
@@ -48,6 +49,10 @@ assumes are enforced, and `docs/developers.md` for architecture detail.
 
 ## Residual risks
 
+- **A clipboard provider can still fill the kernel pipe before the cap
+  kills it.** `PasteJob.qml` bounds what the plugin retains and how long it
+  waits, but the provider controls its write rate; the cap is not a
+  producer-side bandwidth guarantee.
 - **`StdioCollector`/`SplitParser` buffer a line in full until its
   newline.** A `gh` process emitting an unterminated stream has that output
   buffered by Quickshell itself before this plugin's own caps
