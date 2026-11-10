@@ -248,8 +248,9 @@ only when ready to ship.
 matrix and sets `GHS_SHELL_TREE`/`OMARCHY_PLUGIN_VALIDATOR` to that checkout. It runs qmllint
 (0 errors, at least 5 `.qml` files) and the source-tree `omarchy-plugin-validate` first, then the
 Node unit tests (including the palette guard and
-`test/cli-contract.mjs`/`test/host-contract.mjs`) on `archlinux:latest`, then all three probe
-suites under `cage` with a headless wlroots backend.
+`test/cli-contract.mjs`/`test/host-contract.mjs`) on `archlinux:latest`, then the
+service, UI and scoped-settings probe suites under `cage` with a headless wlroots
+backend, and the compositor-independent bounded paste probe on the minimal platform.
 `test/ci-local [--no-cage]` mirrors the same steps against the installed shell by default; set
 `GHS_SHELL_TREE` and `OMARCHY_PLUGIN_VALIDATOR` to point it at another exact checkout.
 
