@@ -81,8 +81,9 @@ already allowed to see. Install and sign in to the GitHub CLI first; see
 then run its sign-in flow once from a terminal. If `gh` is missing or not
 signed in, the bar tells you so instead of failing silently.
 
-Omarchy 4.0.1 or later (including the scoped plugin API introduced in
-4.0.3). This release is validated against Omarchy 4.0.5 and Qt 6.12.
+Omarchy 4.5.0 and 4.0.5 — the current release and its predecessor, on
+Qt 6.12. The scoped plugin API (4.0.3+) is required; earlier 4.0.x builds are
+outside the tested compatibility contract.
 
 ## Install
 

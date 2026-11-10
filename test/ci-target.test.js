@@ -7,8 +7,12 @@ const root = join(__dirname, "..");
 const workflow = readFileSync(join(root, ".github/workflows/test.yml"), "utf8");
 const localGate = readFileSync(join(root, "test/ci-local"), "utf8");
 
-test("CI pins the exact Omarchy 4.0.5 shell tree", () => {
-    assert.match(workflow, /--branch v4\.0\.5 https:\/\/github\.com\/basecamp\/omarchy\.git/);
+test("CI pins the exact supported Omarchy 4.0.5 and 4.5.0 shell trees", () => {
+    const matrix = workflow.match(/omarchy:\s*\[([^\]]+)\]/);
+    assert.ok(matrix, "workflow declares an Omarchy matrix");
+    assert.deepEqual(matrix[1].split(",").map(value => value.trim()).sort(), ["v4.0.5", "v4.5.0"]);
+    assert.match(workflow, /--branch "\$\{\{ matrix\.omarchy \}\}"/);
+    assert.match(workflow, /describe --tags --exact-match\)" = "\$\{\{ matrix\.omarchy \}\}"/);
     assert.match(workflow, /GHS_SHELL_TREE: \/tmp\/omarchy\/shell/);
     assert.match(workflow, /OMARCHY_PLUGIN_VALIDATOR: \/tmp\/omarchy\/bin\/omarchy-plugin-validate/);
     assert.doesNotMatch(workflow, /pacman -Swdd/);

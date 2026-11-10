@@ -9,6 +9,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        omarchy: [v4.0.5, v4.5.0]
     env:
       GHS_SHELL_TREE: /tmp/omarchy/shell
       OMARCHY_PLUGIN_VALIDATOR: /tmp/omarchy/bin/omarchy-plugin-validate
@@ -37,10 +41,10 @@ jobs:
 
       - name: Clone exact Omarchy source
         run: |
-          # Pin the compatibility target instead of testing whatever the
+          # Pin the compatibility targets instead of testing whatever the
           # stable package happens to be today.
-          git clone --depth 1 --branch v4.0.5 https://github.com/basecamp/omarchy.git /tmp/omarchy
-          test "$(git -C /tmp/omarchy describe --tags --exact-match)" = v4.0.5
+          git clone --depth 1 --branch "${{ matrix.omarchy }}" https://github.com/basecamp/omarchy.git /tmp/omarchy
+          test "$(git -C /tmp/omarchy describe --tags --exact-match)" = "${{ matrix.omarchy }}"
           test -d "$GHS_SHELL_TREE"
           test -x "$OMARCHY_PLUGIN_VALIDATOR"
 

@@ -175,6 +175,18 @@ else
     || not_ok "ok: bar tooltipSummary reads \"GitHub Status — 1 PR\" (got: $(field "$json" tooltipSummary))"
   [[ "$(field "$json" statusSeverity)" == "ok" ]] && ok "ok: bar statusSeverity===\"ok\"" \
     || not_ok "ok: bar statusSeverity===\"ok\" (got: $(field "$json" statusSeverity))"
+  [[ "$(field "$json" barOverlaysFound)" == "true" ]] && ok "ok: bar overlays are outside the icon component" \
+    || not_ok "ok: bar overlays are outside the icon component (got: $(field "$json" barOverlaysFound))"
+  [[ "$(field "$json" unreadBadgeFound)" == "true" && "$(field "$json" unreadBadgeInOverlay)" == "true" ]] \
+    && ok "ok: unread badge is a direct child of the overlay" \
+    || not_ok "ok: unread badge is a direct child of the overlay (found=$(field "$json" unreadBadgeFound) inOverlay=$(field "$json" unreadBadgeInOverlay))"
+  [[ "$(field "$json" statusDotFound)" == "true" && "$(field "$json" statusDotInOverlay)" == "true" ]] \
+    && ok "ok: status dot is a direct child of the overlay" \
+    || not_ok "ok: status dot is a direct child of the overlay (found=$(field "$json" statusDotFound) inOverlay=$(field "$json" statusDotInOverlay))"
+  [[ "$(field "$json" unreadBadgeUnscaled)" == "true" ]] && ok "ok: unread badge escapes host icon scaling" \
+    || not_ok "ok: unread badge escapes host icon scaling (got: $(field "$json" unreadBadgeUnscaled))"
+  [[ "$(field "$json" statusDotUnscaled)" == "true" ]] && ok "ok: status dot escapes host icon scaling" \
+    || not_ok "ok: status dot escapes host icon scaling (got: $(field "$json" statusDotUnscaled))"
   [[ "$(field "$json" settingsSource)" == "legacy" ]] && ok "ok: svc.settingsSource===\"legacy\" (stub shellConfig pins the pre-scoped-facade path)" \
     || not_ok "ok: svc.settingsSource===\"legacy\" (got: $(field "$json" settingsSource))"
   [[ "$(field "$json" scopedHost)" == "false" ]] && ok "ok: svc.scopedHost===false" \

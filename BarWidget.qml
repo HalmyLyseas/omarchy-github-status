@@ -109,8 +109,8 @@ BarWidget {
     tooltipText: root.tooltipSummary
     onPressed: function(b) { root.toggle() }
 
-    // Icon + count-pill composite -- no first-party widget renders a numeric
-    // badge, so this is bespoke but built entirely from Style/Color tokens.
+    // The host normalizes a custom iconComponent to Style.bar.iconSize (4.5),
+    // so only the mark lives here; the overlays stay outside that transform.
     iconComponent: Component {
       Item {
         width: Style.bar.iconCanvas
@@ -124,49 +124,59 @@ BarWidget {
           font.family: button.fontFamily
           font.pixelSize: button.fontSize
         }
-
-        Rectangle {
-          id: pill
-          visible: root.unreadCount > 0
-          width: Math.max(Style.space(14), countText.implicitWidth + Style.space(6))
-          height: Style.space(14)
-          radius: height / 2
-          color: root.urgent
-          anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.rightMargin: -Style.space(4)
-          anchors.topMargin: -Style.space(4)
-
-          Text {
-            id: countText
-            anchors.centerIn: parent
-            // badgeText() caps the display at "99+" -- Model.js §"bar text",
-            // the same cap the service itself applies to unreadCount.
-            text: Model.badgeText(root.unreadCount)
-            textFormat: Text.PlainText
-            color: Commons.Color.background
-            font.family: button.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-          }
-        }
-
-        // Degraded-status dot, opposite corner from the unread pill --
-        // severe (no-gh/unauthenticated) in urgent color, warn (offline/
-        // rate-limited/api-error) a dim foreground tint.
-        Rectangle {
-          visible: root.statusSeverity === "warn" || root.statusSeverity === "severe"
-          width: Style.space(6)
-          height: Style.space(6)
-          radius: height / 2
-          color: root.statusSeverity === "severe" ? root.urgent : button.foreground
-          opacity: root.statusSeverity === "severe" ? 1 : 0.6
-          anchors.right: parent.right
-          anchors.bottom: parent.bottom
-          anchors.rightMargin: -Style.space(2)
-          anchors.bottomMargin: -Style.space(2)
-        }
       }
+    }
+  }
+
+  Item {
+    id: barOverlays
+    objectName: "barOverlays"
+    width: Style.bar.iconCanvas
+    height: Style.bar.iconCanvas
+    anchors.centerIn: button
+
+    Rectangle {
+      id: pill
+      objectName: "unreadBadge"
+      visible: root.unreadCount > 0
+      width: Math.max(Style.space(14), countText.implicitWidth + Style.space(6))
+      height: Style.space(14)
+      radius: height / 2
+      color: root.urgent
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.rightMargin: -Style.space(4)
+      anchors.topMargin: -Style.space(4)
+
+      Text {
+        id: countText
+        anchors.centerIn: parent
+        // badgeText() caps the display at "99+" -- Model.js §"bar text",
+        // the same cap the service itself applies to unreadCount.
+        text: Model.badgeText(root.unreadCount)
+        textFormat: Text.PlainText
+        color: Commons.Color.background
+        font.family: button.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+    }
+
+    // Degraded-status dot, opposite corner from the unread pill --
+    // severe (no-gh/unauthenticated) in urgent color, warn (offline/
+    // rate-limited/api-error) a dim foreground tint.
+    Rectangle {
+      objectName: "statusDot"
+      visible: root.statusSeverity === "warn" || root.statusSeverity === "severe"
+      width: Style.space(6)
+      height: Style.space(6)
+      radius: height / 2
+      color: root.statusSeverity === "severe" ? root.urgent : button.foreground
+      opacity: root.statusSeverity === "severe" ? 1 : 0.6
+      anchors.right: parent.right
+      anchors.bottom: parent.bottom
+      anchors.rightMargin: -Style.space(2)
+      anchors.bottomMargin: -Style.space(2)
     }
   }
 }

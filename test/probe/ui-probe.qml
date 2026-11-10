@@ -174,6 +174,29 @@ ShellRoot {
     return null
   }
 
+  function findByName(item, name) {
+    if (!item) return null
+    if (item.objectName === name) return item
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var found = findByName(kids[i], name)
+      if (found) return found
+    }
+    return null
+  }
+
+  // A bar overlay must not inherit the host's icon normalization: 4.5 scales
+  // a custom iconComponent's painted bounds to Style.bar.iconSize.
+  function isUnscaled(item) {
+    if (!item || !barWidget) return false
+    var p = item.parent
+    while (p && p !== barWidget) {
+      if (Math.abs(Number(p.scale) - 1) > 0.001) return false
+      p = p.parent
+    }
+    return true
+  }
+
   // Every section is `Column { SectionHeader {...}; Column { visible:
   // !collapsed; Repeater {...} } }` -- given the header, its parent's
   // second child is the row-list Column.
@@ -217,6 +240,9 @@ ShellRoot {
     var prHeader = findByProp(content, "text", "MY OPEN PULL REQUESTS")
     var issuesHeader = findByProp(content, "text", "MY OPEN ISSUES")
     var reposHeader = findByProp(content, "text", "REPOSITORIES")
+    var badge = findByName(barWidget, "unreadBadge")
+    var statusDot = findByName(barWidget, "statusDot")
+    var overlays = findByName(barWidget, "barOverlays")
     function count(h) { var r = sectionRepeater(h); return r ? r.count : null }
     finish("", {
       status: svc.status,
@@ -238,6 +264,13 @@ ShellRoot {
       hasAttention: barWidget.hasAttention,
       tooltipSummary: barWidget.tooltipSummary,
       statusSeverity: barWidget.statusSeverity,
+      barOverlaysFound: overlays !== null,
+      unreadBadgeFound: badge !== null,
+      statusDotFound: statusDot !== null,
+      unreadBadgeInOverlay: badge !== null && overlays !== null && badge.parent === overlays,
+      statusDotInOverlay: statusDot !== null && overlays !== null && statusDot.parent === overlays,
+      unreadBadgeUnscaled: isUnscaled(badge),
+      statusDotUnscaled: isUnscaled(statusDot),
       settingsSource: svc.settingsSource,
       scopedHost: svc.scopedHost
     })
