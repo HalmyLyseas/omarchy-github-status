@@ -802,10 +802,13 @@ test("pasteQuery: inserts at the cursor and replaces a selection", function () {
 test("pasteQuery: falls back to the cursor or end for invalid offsets", function () {
   assert.deepStrictEqual(Model.pasteQuery("abc", -1, -1, 2, "X"), { text: "abXc", cursor: 3 })
   assert.deepStrictEqual(Model.pasteQuery("abc", -1, -1, -1, "X"), { text: "abcX", cursor: 4 })
+  assert.deepStrictEqual(Model.pasteQuery("abc", null, null, null, "X"), { text: "abcX", cursor: 4 })
+  assert.deepStrictEqual(Model.pasteQuery("abc", 1.9, 1.9, 1.9, "X"), { text: "aXbc", cursor: 2 })
 })
 
 test("pasteQuery: strips control characters, collapses whitespace and caps at QUERY_CAP", function () {
   assert.deepStrictEqual(Model.pasteQuery("", 0, 0, 0, "a\nb\t c"), { text: "a b c", cursor: 5 })
+  assert.deepStrictEqual(Model.pasteQuery("", 0, 0, 0, "a\u0085b"), { text: "a b", cursor: 3 })
   var long = "x".repeat(Model.QUERY_CAP - 10) + "y".repeat(20)
   var result = Model.pasteQuery("", 0, 0, 0, long)
   assert.strictEqual(result.text.length, Model.QUERY_CAP)

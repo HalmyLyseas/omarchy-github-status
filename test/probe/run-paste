@@ -98,6 +98,9 @@ run_scenario stall stall stall "" "$MOCK"
 run_scenario cancel cancel slow "" "$MOCK"
 run_scenario fail fail fail "" "$MOCK"
 run_scenario missing missing normal "" "/nonexistent/wl-paste"
+run_scenario cap-ok cap-ok cap-ok "" "$MOCK"
+run_scenario cap-over cap-over cap-over "" "$MOCK"
+run_scenario term-ignore term-ignore term-ignore "" "$MOCK"
 
 check_result normal "$(cat "$OUT_DIR/normal.logpath")" true "hello" ""
 check_result primary "$(cat "$OUT_DIR/primary.logpath")" true "primary" ""
@@ -108,8 +111,13 @@ check_result stall "$(cat "$OUT_DIR/stall.logpath")" false "" "clipboard timed o
 check_result cancel "$(cat "$OUT_DIR/cancel.logpath")" false "" "cancelled"
 check_result fail "$(cat "$OUT_DIR/fail.logpath")" false "" "clipboard read failed"
 check_result missing "$(cat "$OUT_DIR/missing.logpath")" false "" "clipboard read failed"
+check_result cap-ok "$(cat "$OUT_DIR/cap-ok.logpath")" true "" ""
+check_result cap-over "$(cat "$OUT_DIR/cap-over.logpath")" false "" "clipboard too large"
+check_result term-ignore "$(cat "$OUT_DIR/term-ignore.logpath")" false "" "clipboard timed out"
+[[ "$(field "$(cat "$OUT_DIR/cap-ok.logpath")" textLength)" == "64" ]] && ok "cap-ok: accepted exactly the 64-character cap" \
+  || not_ok "cap-ok: accepted exactly the 64-character cap (got: $(field "$(cat "$OUT_DIR/cap-ok.logpath")" textLength))"
 
-for label in normal primary oversized stall cancel fail missing; do check_orphans "$label"; done
+for label in normal primary oversized stall cancel fail missing cap-ok cap-over term-ignore; do check_orphans "$label"; done
 
 echo
 if [[ "$fail_count" -eq 0 ]]; then

@@ -28,11 +28,22 @@ case "$MODE" in
   flood)
     while :; do printf '0123456789abcdef'; done
     ;;
+  cap-ok)
+    printf '%064d' 0 | tr '0' 'a'
+    ;;
+  cap-over)
+    printf '%065d' 0 | tr '0' 'a'
+    ;;
+  term-ignore)
+    trap '' TERM
+    printf 'x'
+    while :; do :; done
+    ;;
   slow)
     while :; do printf 'x'; sleep 0.1; done
     ;;
   stall)
-    sleep 600
+    exec sleep 600
     ;;
   *)
     echo "wl-paste: unknown mock mode: $MODE" >&2

@@ -19,6 +19,7 @@ ShellRoot {
       scenario: root.scenario,
       ok: root.result.ok,
       text: root.result.text,
+      textLength: root.result.text ? root.result.text.length : 0,
       error: root.result.error,
       busy: root.result.busy,
       pid: root.result.pid

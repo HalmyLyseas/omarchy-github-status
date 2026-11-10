@@ -438,6 +438,9 @@ Panel {
                 acceptedButtons: Qt.MiddleButton
                 onPressed: function(mouse) {
                   mouse.accepted = true
+                  searchField.forceActiveFocus()
+                  var at = searchField.positionAt(mouse.x, mouse.y)
+                  if (at >= 0) searchField.cursorPosition = at
                   pasteJob.paste(true)
                 }
               }

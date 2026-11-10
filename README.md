@@ -188,11 +188,12 @@ omarchy plugin validate .
 palette audits, the comment-hygiene scan, the CI target guard), two read-only
 contract tests (a version pin against your real installed `gh` CLI, and a check that the installed
 Omarchy plugin facade still exposes what this plugin depends on — both
-skip cleanly when the thing they check isn't present), then three
-`qs -n -p` probe suites: one drives the real `Service.qml` through its full
-status ladder against a mock `gh`, one drives the real `BarWidget.qml`/
-`Panel.qml` against a stub shell/bar, and one drives the settings path
-against the real installed plugin facade and an isolated `shell.json`. A
+skip cleanly when the thing they check isn't present), then four QML probe
+suites: one drives the real `Service.qml` through its full status ladder
+against a mock `gh`, one drives the real `BarWidget.qml`/`Panel.qml` against a
+stub shell/bar, one drives the settings path against the real installed plugin
+facade and an isolated `shell.json`, and one drives `PasteJob.qml` against a
+mode-driven `wl-paste` mock. A
 GitHub Actions workflow (`.github/workflows/test.yml`) runs the same checks
 headlessly on every push/PR; `test/ci-local [--no-cage]` mirrors it on a
 dev box. See [`docs/developers.md`](docs/developers.md) "Testing"/"CI" for

@@ -26,6 +26,11 @@ node --test "$SCRIPT_DIR/ci-target.test.js"
 if [[ $? -ne 0 ]]; then overall=1; fi
 
 echo
+echo "== paste-routes.test.js (node) =="
+node --test "$SCRIPT_DIR/paste-routes.test.js"
+if [[ $? -ne 0 ]]; then overall=1; fi
+
+echo
 echo "== host-contract.mjs (read-only; skips cleanly without an installed shell tree) =="
 node "$SCRIPT_DIR/host-contract.mjs"
 if [[ $? -ne 0 ]]; then overall=1; fi

@@ -167,7 +167,7 @@ on an unpinned major.
   render as rich text. `SafeToolTip` in `Panel.qml` is a drop-in `PanelToolTip` replacement that
   forces this.
 - **Bounded paste.** Native paste routes are intercepted; `PasteJob.qml` reads the selection
-  through a direct `wl-paste` child with a byte cap, deadline and kill escalation, never the
+  through a direct `wl-paste` child with a character cap, deadline and kill escalation, never the
   unbounded synchronous Qt path.
 - **No disk cache of GitHub data.** Every list lives in QML memory only. The one disk write is
   its settings entry, via `bar.shell.updateEntryInline()` — which **replaces** the whole entry;
@@ -233,7 +233,8 @@ only when ready to ship.
   `statusSeverity`/status dot and `statusHint` text, the partial-dashboard surface, search
   narrowing, fold/unfold, the `svc` null→new-instance lifecycle, and item navigation (rejected
   URLs stay open; a safe handoff closes the popup).
-- `test/probe/run-paste` — the real `PasteJob.qml` against a mode-driven `wl-paste` mock: normal and primary selection, oversized, stalled, failed, cancelled and missing-provider paths, with orphan checks.
+- `test/probe/run-paste` — the real `PasteJob.qml` against a mode-driven `wl-paste` mock: normal and primary selection, the exact 64-character cap boundary, oversized, stalled, TERM-ignoring, failed, cancelled and missing-provider paths, with orphan checks.
+- `test/paste-routes.test.js` (Node) — pins the intercepted keyboard, middle-click and context-menu routes and the bounded job's cap/deadline/kill contract.
 - `test/probe/run-scoped-settings` — a third `qs -n -p` instance driving the real
   `PluginShellApi.qml`/`BarWidget.qml`/`Panel.qml` against a temp `shell.json`: seeded values, no
   boot write, the toggle round trip preserving siblings, malformed/deleted config, a written

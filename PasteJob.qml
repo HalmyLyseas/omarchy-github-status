@@ -45,8 +45,9 @@ Item {
     root._failed = true
     root._failure = reason || "cancelled"
     if (child.running) {
-      child.signal(15)
+      if (child.processId > 0) child.signal(15)
       killDeadline.restart()
+      hardDeadline.restart()
     } else root.complete(root._serial, false)
   }
 
@@ -65,6 +66,7 @@ Item {
     root._doneSerial = serial
     deadline.stop()
     killDeadline.stop()
+    hardDeadline.stop()
     var text = root._text
     var error = root._failure
     var ok = success && !root._failed
@@ -80,12 +82,24 @@ Item {
     id: killDeadline
     interval: 1000
     repeat: false
-    onTriggered: if (child.running && child.processId === root._pid) child.signal(9)
+    onTriggered: if (child.running && child.processId > 0 && child.processId === root._pid) child.signal(9)
+  }
+  Timer {
+    id: hardDeadline
+    interval: 2000
+    repeat: false
+    onTriggered: if (child.running) {
+      child.running = false
+      root.complete(root._serial, false)
+    }
   }
   Process {
     id: child
     running: false
-    onStarted: root._pid = processId
+    onStarted: {
+      root._pid = processId
+      if (root._failed && root._pid > 0) child.signal(15)
+    }
     onRunningChanged: if (!running) {
       var serial = root._serial
       Qt.callLater(function() { if (!child.running) root.complete(serial, false) })

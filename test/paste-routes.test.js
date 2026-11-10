@@ -13,10 +13,14 @@ test("every native paste route in the search field is replaced", () => {
     assert.match(panel, /Qt\.Key_Insert/);
     assert.match(panel, /Qt\.Key_Paste/);
     assert.match(panel, /acceptedButtons: Qt\.MiddleButton/);
+    assert.match(panel, /event\.accepted = true/);
     assert.match(panel, /pasteJob\.paste\(true\)/);
+    assert.match(panel, /positionAt\(mouse\.x, mouse\.y\)/);
     assert.match(panel, /ContextMenu\.menu: Menu/);
-    assert.match(panel, /text: "Paste"[\s\S]*pasteJob\.paste\(false\)/);
+    assert.match(panel, /text: "Paste"[\s\S]{0,200}pasteJob\.paste\(false\)/);
     assert.match(panel, /Model\.pasteQuery/);
+    assert.match(panel, /pasteJob\.cancel\(\)/);
+    assert.doesNotMatch(panel, /PasteAction/);
     assert.doesNotMatch(panel, /TextEditingContextMenu/);
 });
 
